@@ -10,8 +10,8 @@ services:
       - AZURE_API_VERSION=${AZURE_API_VERSION}
     volumes:
       - sqlite_data:/app/data
-    ports:
-      - "8000:8000"
+    expose:
+      - "8000"
 
   frontend:
     build:
@@ -21,8 +21,8 @@ services:
     restart: unless-stopped
     environment:
       - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
-    ports:
-      - "3000:3000"
+    expose:
+      - "3000"
     depends_on:
       - backend
 
