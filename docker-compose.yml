@@ -12,6 +12,8 @@ services:
       - sqlite_data:/app/data
     expose:
       - "8000"
+    networks:
+      - dokploy-network
 
   frontend:
     build:
@@ -25,6 +27,12 @@ services:
       - "3000"
     depends_on:
       - backend
+    networks:
+      - dokploy-network
 
 volumes:
   sqlite_data:
+
+networks:
+  dokploy-network:
+    external: true
