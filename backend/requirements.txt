@@ -6,3 +6,4 @@ sqlalchemy==2.0.36
 pydantic==2.10.3
 python-dotenv==1.0.1
 python-multipart==0.0.12
+pypdf>=4.0.0

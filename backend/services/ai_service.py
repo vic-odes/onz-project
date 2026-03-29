@@ -1,4 +1,6 @@
 import os
+import io
+import base64
 import json
 import litellm
 from dotenv import load_dotenv
@@ -29,16 +31,18 @@ sur la base du secteur et du pays fournis.
 """
 
 
-async def generate_project_content(project_data: dict) -> dict:
-    """
-    Génère le contenu complet du projet via LiteLLM.
-    Changer de modèle = modifier LLM_MODEL dans .env uniquement.
-    """
-    user_prompt = f"""
+def _build_user_prompt(project_data: dict, has_references: bool) -> str:
+    reference_note = (
+        "\nLes documents de référence joints (rapports précédents, appels à projets, "
+        "guidelines du bailleur) doivent guider et enrichir le contenu généré. "
+        "Tiens compte de leur contenu, de leur structure et de leur terminologie.\n"
+        if has_references else ""
+    )
+    return f"""
 Génère un document complet de projet de développement international basé sur ces informations :
 
 {json.dumps(project_data, ensure_ascii=False, indent=2)}
-
+{reference_note}
 Réponds avec un objet JSON contenant exactement ces clés :
 {{
   "introduction": "...",
@@ -90,6 +94,42 @@ Règles importantes :
 - resume_executif : synthèse 500 mots si inclure_resume_executif est true, sinon chaîne vide
 """
 
+
+def _extract_text_from_pdfs(pdfs_b64: list[str]) -> str:
+    """Extrait le texte brut des PDFs encodés en base64 (fallback modèles non-vision)."""
+    import pypdf
+
+    texts = []
+    for i, pdf_b64 in enumerate(pdfs_b64, 1):
+        try:
+            pdf_bytes = base64.b64decode(pdf_b64)
+            reader = pypdf.PdfReader(io.BytesIO(pdf_bytes))
+            pages_text = "\n".join(page.extract_text() or "" for page in reader.pages)
+            if pages_text.strip():
+                texts.append(f"--- Document de référence {i} ---\n{pages_text.strip()}")
+        except Exception:
+            pass
+    return "\n\n".join(texts)
+
+
+async def _call_llm(messages: list, extra: dict) -> str:
+    response = await litellm.acompletion(
+        model=MODEL,
+        messages=messages,
+        max_tokens=8000,
+        temperature=0.3,
+        **extra,
+    )
+    raw = response.choices[0].message.content
+    return raw.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
+
+
+async def generate_project_content(project_data: dict, reference_pdfs: list[str] | None = None) -> dict:
+    """
+    Génère le contenu complet du projet via LiteLLM.
+    Si des PDFs de référence sont fournis, ils sont envoyés directement au modèle.
+    En cas d'échec (modèle non-vision), le texte est extrait et réinjecté dans le prompt.
+    """
     # Paramètres Azure passés explicitement si disponibles
     extra = {}
     if os.getenv("AZURE_API_KEY"):
@@ -99,18 +139,51 @@ Règles importantes :
     if os.getenv("AZURE_API_VERSION"):
         extra["api_version"] = os.getenv("AZURE_API_VERSION")
 
-    response = await litellm.acompletion(
-        model=MODEL,
-        messages=[
+    user_prompt = _build_user_prompt(project_data, bool(reference_pdfs))
+
+    # Construction des messages — avec documents natifs si PDFs fournis
+    if reference_pdfs:
+        content: list = [
+            {
+                "type": "document",
+                "source": {
+                    "type": "base64",
+                    "media_type": "application/pdf",
+                    "data": pdf_b64,
+                },
+            }
+            for pdf_b64 in reference_pdfs
+        ]
+        content.append({"type": "text", "text": user_prompt})
+        messages = [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": content},
+        ]
+    else:
+        messages = [
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": user_prompt},
-        ],
-        max_tokens=8000,
-        temperature=0.3,
-        **extra,
-    )
+        ]
 
-    raw = response.choices[0].message.content
-    # Nettoyage au cas où le modèle ajoute des backticks malgré les instructions
-    raw = raw.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
+    try:
+        raw = await _call_llm(messages, extra)
+    except Exception as e:
+        # Fallback : le modèle ne supporte pas les documents — extraction texte + retry
+        if reference_pdfs:
+            extracted = _extract_text_from_pdfs(reference_pdfs)
+            if extracted:
+                fallback_prompt = (
+                    user_prompt
+                    + f"\n\nDocuments de référence (texte extrait) :\n{extracted}"
+                )
+            else:
+                fallback_prompt = user_prompt
+            fallback_messages = [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": fallback_prompt},
+            ]
+            raw = await _call_llm(fallback_messages, extra)
+        else:
+            raise
+
     return json.loads(raw)

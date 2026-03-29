@@ -2,6 +2,7 @@
 import { useState } from "react";
 import { generateDocument, ProjectFormData } from "@/lib/api";
 import GenerationLoader from "./GenerationLoader";
+import PdfUpload from "./PdfUpload";
 
 const SECTEURS = [
   "Santé",
@@ -27,6 +28,7 @@ const STEP_LABELS = [
   "Problématique & Objectifs",
   "Planification",
   "Budget",
+  "Documents de référence",
   "Confirmation",
 ];
 
@@ -51,9 +53,16 @@ const defaultForm: ProjectFormData = {
   inclure_resume_executif: false,
 };
 
+interface PdfFile {
+  name: string;
+  sizeKb: number;
+  b64: string;
+}
+
 export default function Stepper() {
   const [step, setStep] = useState(0);
   const [form, setForm] = useState<ProjectFormData>(defaultForm);
+  const [referencePdfs, setReferencePdfs] = useState<PdfFile[]>([]);
   const [generating, setGenerating] = useState(false);
   const [blob, setBlob] = useState<Blob | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -104,6 +113,7 @@ export default function Stepper() {
       const result = await generateDocument({
         ...form,
         objectifs_specifiques: form.objectifs_specifiques.filter((o) => o.trim()),
+        reference_pdfs: referencePdfs.length > 0 ? referencePdfs.map((f) => f.b64) : undefined,
       });
       setBlob(result);
     } catch (e: unknown) {
@@ -132,6 +142,7 @@ export default function Stepper() {
                 setGenerating(false);
                 setStep(0);
                 setForm(defaultForm);
+                setReferencePdfs([]);
               }}
               className="btn-secondary"
             >
@@ -407,8 +418,20 @@ export default function Stepper() {
           </div>
         )}
 
-        {/* ÉTAPE 5 — CONFIRMATION */}
+        {/* ÉTAPE 5 — DOCUMENTS DE RÉFÉRENCE */}
         {step === 4 && (
+          <div className="flex flex-col gap-5">
+            <p className="font-source text-sm text-gray-600">
+              Optionnel — Joignez des PDFs de référence (rapports précédents, appels à projets,
+              guidelines du bailleur). L&apos;IA analysera leur contenu, leurs schémas et leurs
+              tableaux pour enrichir le document généré.
+            </p>
+            <PdfUpload files={referencePdfs} onChange={setReferencePdfs} />
+          </div>
+        )}
+
+        {/* ÉTAPE 6 — CONFIRMATION */}
+        {step === 5 && (
           <div className="flex flex-col gap-5">
             <div className="bg-gray-50 rounded-lg p-4 font-source text-sm space-y-2">
               <h3 className="font-playfair text-base font-bold text-bleu-marine mb-3">
@@ -439,6 +462,14 @@ export default function Stepper() {
                       <li key={i}>{o}</li>
                     ))}
                   </ul>
+                </div>
+              )}
+              {referencePdfs.length > 0 && (
+                <div className="flex gap-2">
+                  <span className="font-semibold text-bleu-marine w-44 flex-shrink-0">Documents PDF :</span>
+                  <span className="text-vert-sauge font-semibold">
+                    {referencePdfs.length} fichier{referencePdfs.length > 1 ? "s" : ""} joint{referencePdfs.length > 1 ? "s" : ""}
+                  </span>
                 </div>
               )}
             </div>
@@ -480,7 +511,7 @@ export default function Stepper() {
             ← Précédent
           </button>
 
-          {step < 4 ? (
+          {step < 5 ? (
             <button onClick={handleNext} className="btn-primary">
               Suivant →
             </button>

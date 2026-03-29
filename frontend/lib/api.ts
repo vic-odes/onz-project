@@ -19,6 +19,8 @@ export interface ProjectFormData {
   part_couts_operationnels: number;
   generer_note_conceptuelle: boolean;
   inclure_resume_executif: boolean;
+  // PDFs de référence encodés en base64 (données seules, sans le préfixe data:)
+  reference_pdfs?: string[];
 }
 
 export interface ProjectSummary {

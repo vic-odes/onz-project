@@ -11,9 +11,13 @@ router = APIRouter()
 
 @router.post("/")
 async def generate_document(project: ProjectCreate):
+    # Extraire les PDFs du payload — ils ne doivent pas être sérialisés dans le prompt ni en base
+    project_dict = project.model_dump()
+    reference_pdfs = project_dict.pop("reference_pdfs", None) or []
+
     try:
         # 1. Génération IA via LiteLLM
-        generated = await ai_service.generate_project_content(project.model_dump())
+        generated = await ai_service.generate_project_content(project_dict, reference_pdfs or None)
     except json.JSONDecodeError as e:
         raise HTTPException(
             status_code=500,
@@ -27,7 +31,7 @@ async def generate_document(project: ProjectCreate):
 
     try:
         # 2. Création du fichier Word
-        docx_bytes = docx_service.create_word_document(project.model_dump(), generated)
+        docx_bytes = docx_service.create_word_document(project_dict, generated)
     except Exception as e:
         raise HTTPException(
             status_code=500,
@@ -36,7 +40,7 @@ async def generate_document(project: ProjectCreate):
 
     # 3. Sauvegarde en base SQLite (non bloquant sur erreur)
     try:
-        save_project(project.model_dump(), generated)
+        save_project(project_dict, generated)
     except Exception:
         pass  # La sauvegarde est optionnelle, ne pas bloquer le téléchargement
 
