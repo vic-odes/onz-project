@@ -71,3 +71,17 @@ export async function deleteProject(id: number): Promise<void> {
   const response = await fetch(`${API_BASE}/api/projects/${id}`, { method: "DELETE" });
   if (!response.ok) throw new Error("Impossible de supprimer le projet.");
 }
+
+export async function prefillFromPdf(pdfB64: string): Promise<Partial<ProjectFormData>> {
+  const response = await fetch(`${API_BASE}/api/documents/prefill`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ pdf_b64: pdfB64 }),
+  });
+  if (!response.ok) {
+    let msg = "Impossible d'extraire les données du PDF.";
+    try { const e = await response.json(); msg = e.detail || msg; } catch {}
+    throw new Error(msg);
+  }
+  return response.json();
+}

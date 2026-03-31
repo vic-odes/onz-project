@@ -1,6 +1,6 @@
 "use client";
 import { useState } from "react";
-import { generateDocument, ProjectFormData } from "@/lib/api";
+import { generateDocument, prefillFromPdf, ProjectFormData } from "@/lib/api";
 import GenerationLoader from "./GenerationLoader";
 import PdfUpload from "./PdfUpload";
 
@@ -62,7 +62,11 @@ interface PdfFile {
 export default function Stepper() {
   const [step, setStep] = useState(0);
   const [form, setForm] = useState<ProjectFormData>(defaultForm);
+  const [bailleurCustom, setBailleurCustom] = useState("");
+  const [budgetPdfs, setBudgetPdfs] = useState<PdfFile[]>([]);
   const [referencePdfs, setReferencePdfs] = useState<PdfFile[]>([]);
+  const [prefilling, setPrefilling] = useState(false);
+  const [prefillError, setPrefillError] = useState<string | null>(null);
   const [generating, setGenerating] = useState(false);
   const [blob, setBlob] = useState<Blob | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -85,12 +89,53 @@ export default function Stepper() {
       form.objectifs_specifiques.map((o, idx) => (idx === i ? val : o))
     );
 
+  const handlePrefill = async (file: File) => {
+    setPrefillError(null);
+    setPrefilling(true);
+    try {
+      const b64 = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve((reader.result as string).split(",")[1]);
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+      const extracted = await prefillFromPdf(b64);
+      // Pré-remplir les champs du formulaire avec les données extraites
+      setForm((prev) => ({
+        ...prev,
+        ...(extracted.nom && { nom: extracted.nom }),
+        ...(extracted.pays && { pays: extracted.pays }),
+        ...(extracted.secteur && { secteur: extracted.secteur }),
+        ...(extracted.bailleur && { bailleur: BAILLEURS.includes(extracted.bailleur) ? extracted.bailleur : "Autre" }),
+        ...(extracted.probleme_principal && { probleme_principal: extracted.probleme_principal }),
+        ...(extracted.objectif_global && { objectif_global: extracted.objectif_global }),
+        ...(extracted.objectifs_specifiques?.length && { objectifs_specifiques: extracted.objectifs_specifiques }),
+        ...(extracted.population_cible && { population_cible: extracted.population_cible }),
+        ...(extracted.nombre_beneficiaires && { nombre_beneficiaires: extracted.nombre_beneficiaires }),
+        ...(extracted.duree_mois && { duree_mois: extracted.duree_mois }),
+        ...(extracted.budget_total && { budget_total: extracted.budget_total }),
+        ...(extracted.source_financement && { source_financement: extracted.source_financement }),
+        ...(extracted.contraintes && { contraintes: extracted.contraintes }),
+        ...(extracted.risques_identifies && { risques_identifies: extracted.risques_identifies }),
+      }));
+      // Si le bailleur extrait n'est pas dans la liste, le mettre dans le champ custom
+      if (extracted.bailleur && !BAILLEURS.includes(extracted.bailleur)) {
+        setBailleurCustom(extracted.bailleur);
+      }
+    } catch (e) {
+      setPrefillError(e instanceof Error ? e.message : "Erreur lors de l'extraction");
+    } finally {
+      setPrefilling(false);
+    }
+  };
+
   const validateStep = (): string | null => {
     if (step === 0) {
       if (!form.nom.trim()) return "Le nom du projet est requis.";
       if (!form.pays.trim()) return "Le pays est requis.";
       if (!form.secteur) return "Veuillez choisir un secteur.";
       if (!form.bailleur) return "Veuillez choisir un bailleur.";
+      if (form.bailleur === "Autre" && !bailleurCustom.trim()) return "Veuillez préciser le nom du bailleur.";
     }
     if (step === 1) {
       if (!form.probleme_principal.trim()) return "La problématique est requise.";
@@ -109,11 +154,13 @@ export default function Stepper() {
     setGenerating(true);
     setError(null);
     setBlob(null);
+    const allPdfs = [...budgetPdfs, ...referencePdfs];
     try {
       const result = await generateDocument({
         ...form,
+        bailleur: form.bailleur === "Autre" ? bailleurCustom : form.bailleur,
         objectifs_specifiques: form.objectifs_specifiques.filter((o) => o.trim()),
-        reference_pdfs: referencePdfs.length > 0 ? referencePdfs.map((f) => f.b64) : undefined,
+        reference_pdfs: allPdfs.length > 0 ? allPdfs.map((f) => f.b64) : undefined,
       });
       setBlob(result);
     } catch (e: unknown) {
@@ -133,7 +180,7 @@ export default function Stepper() {
           fileName={fileName}
           error={error}
         />
-        {(blob || error) && (
+        {blob && (
           <div className="flex justify-center mt-4">
             <button
               onClick={() => {
@@ -142,11 +189,44 @@ export default function Stepper() {
                 setGenerating(false);
                 setStep(0);
                 setForm(defaultForm);
+                setBailleurCustom("");
+                setBudgetPdfs([]);
                 setReferencePdfs([]);
+                setPrefillError(null);
               }}
               className="btn-secondary"
             >
               Créer un nouveau projet
+            </button>
+          </div>
+        )}
+        {error && (
+          <div className="flex justify-center gap-3 mt-4 flex-wrap">
+            <button
+              onClick={handleGenerate}
+              className="btn-primary"
+            >
+              ↺ Réessayer
+            </button>
+            <button
+              onClick={() => { setError(null); setStep(5); }}
+              className="btn-secondary"
+            >
+              ← Modifier le projet
+            </button>
+            <button
+              onClick={() => {
+                setError(null);
+                setStep(0);
+                setForm(defaultForm);
+                setBailleurCustom("");
+                setBudgetPdfs([]);
+                setReferencePdfs([]);
+                setPrefillError(null);
+              }}
+              className="btn-secondary"
+            >
+              Nouveau projet
             </button>
           </div>
         )}
@@ -192,6 +272,29 @@ export default function Stepper() {
         {/* ÉTAPE 1 */}
         {step === 0 && (
           <div className="flex flex-col gap-5">
+            {/* Pré-remplissage depuis un PDF */}
+            <div className="border border-dashed border-bleu-marine/30 rounded-lg p-4 bg-bleu-marine/5">
+              <p className="label mb-2">Pré-remplir depuis un PDF existant <span className="font-normal text-gray-400">(optionnel)</span></p>
+              <p className="font-source text-xs text-gray-500 mb-3">
+                Importez un document de projet, appel à projets ou note conceptuelle — les champs seront remplis automatiquement.
+              </p>
+              <label className={`inline-flex items-center gap-2 cursor-pointer px-4 py-2 rounded-lg border font-source text-sm font-semibold transition-colors
+                ${prefilling ? "bg-gray-100 text-gray-400 border-gray-200 pointer-events-none" : "bg-white border-bleu-marine text-bleu-marine hover:bg-bleu-marine hover:text-white"}`}>
+                {prefilling ? "Extraction en cours…" : "📂 Choisir un PDF"}
+                <input
+                  type="file"
+                  accept="application/pdf"
+                  className="hidden"
+                  disabled={prefilling}
+                  onChange={(e) => e.target.files?.[0] && handlePrefill(e.target.files[0])}
+                />
+              </label>
+              {prefillError && <p className="font-source text-xs text-red-500 mt-2">{prefillError}</p>}
+              {!prefilling && !prefillError && form.nom && (
+                <p className="font-source text-xs text-vert-sauge font-semibold mt-2">✓ Formulaire pré-rempli — vérifiez et complétez si besoin</p>
+              )}
+            </div>
+
             <div>
               <label className="label">Nom du projet *</label>
               <input
@@ -228,13 +331,21 @@ export default function Stepper() {
               <select
                 className="input-field"
                 value={form.bailleur}
-                onChange={(e) => set("bailleur", e.target.value)}
+                onChange={(e) => { set("bailleur", e.target.value); if (e.target.value !== "Autre") setBailleurCustom(""); }}
               >
                 <option value="">-- Sélectionner un bailleur --</option>
                 {BAILLEURS.map((b) => (
                   <option key={b} value={b}>{b}</option>
                 ))}
               </select>
+              {form.bailleur === "Autre" && (
+                <input
+                  className="input-field mt-2"
+                  placeholder="Nom du bailleur *"
+                  value={bailleurCustom}
+                  onChange={(e) => setBailleurCustom(e.target.value)}
+                />
+              )}
             </div>
           </div>
         )}
@@ -374,6 +485,15 @@ export default function Stepper() {
         {/* ÉTAPE 4 */}
         {step === 3 && (
           <div className="flex flex-col gap-5">
+            {/* Import PDF budget */}
+            <div className="border border-dashed border-vert-sauge/40 rounded-lg p-4 bg-vert-sauge/5">
+              <p className="label mb-1">Importer un PDF budgétaire <span className="font-normal text-gray-400">(optionnel)</span></p>
+              <p className="font-source text-xs text-gray-500 mb-3">
+                Joignez un budget existant (tableau, devis, document financier) — l&apos;IA l&apos;utilisera pour construire le budget du projet.
+              </p>
+              <PdfUpload files={budgetPdfs} onChange={setBudgetPdfs} />
+            </div>
+
             <div>
               <label className="label">Budget total estimé (USD)</label>
               <input
@@ -464,11 +584,14 @@ export default function Stepper() {
                   </ul>
                 </div>
               )}
-              {referencePdfs.length > 0 && (
+              {(budgetPdfs.length > 0 || referencePdfs.length > 0) && (
                 <div className="flex gap-2">
                   <span className="font-semibold text-bleu-marine w-44 flex-shrink-0">Documents PDF :</span>
                   <span className="text-vert-sauge font-semibold">
-                    {referencePdfs.length} fichier{referencePdfs.length > 1 ? "s" : ""} joint{referencePdfs.length > 1 ? "s" : ""}
+                    {budgetPdfs.length + referencePdfs.length} fichier{budgetPdfs.length + referencePdfs.length > 1 ? "s" : ""} joint{budgetPdfs.length + referencePdfs.length > 1 ? "s" : ""}
+                    {budgetPdfs.length > 0 && referencePdfs.length > 0 && ` (${budgetPdfs.length} budget, ${referencePdfs.length} référence)`}
+                    {budgetPdfs.length > 0 && referencePdfs.length === 0 && ` budget`}
+                    {budgetPdfs.length === 0 && referencePdfs.length > 0 && ` référence`}
                   </span>
                 </div>
               )}

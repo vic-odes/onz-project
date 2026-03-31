@@ -8,7 +8,7 @@ export default function NouveauProjetPage() {
           Nouveau projet
         </h1>
         <p className="font-source text-gray-600">
-          Complétez les 5 étapes ci-dessous pour générer votre document de projet professionnel.
+          Complétez les étapes ci-dessous pour générer votre document de projet professionnel.
         </p>
       </div>
       <Stepper />

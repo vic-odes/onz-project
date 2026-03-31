@@ -1,11 +1,26 @@
 import os
-from fastapi import FastAPI
+import logging
+import time
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from routers import generate, projects
+from routers import generate, projects, documents
 from database import init_db
 from dotenv import load_dotenv
 
 load_dotenv()
+
+logging.basicConfig(
+    level=logging.DEBUG,
+    format="%(asctime)s [%(levelname)-8s] %(name)s — %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+    force=True,
+)
+# Réduire le bruit des bibliothèques tierces
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
+# logging.getLogger("litellm").setLevel(logging.WARNING)
+logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
+logger = logging.getLogger("main")
 
 app = FastAPI(
     title="ONZ Projet API",
@@ -26,11 +41,27 @@ app.add_middleware(
 
 app.include_router(generate.router, prefix="/api/generate", tags=["Génération"])
 app.include_router(projects.router, prefix="/api/projects", tags=["Projets"])
+app.include_router(documents.router, prefix="/api/documents", tags=["Documents"])
+
+
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    start = time.perf_counter()
+    logger.info("→ %s %s", request.method, request.url.path)
+    try:
+        response = await call_next(request)
+    except Exception:
+        logger.exception("Unhandled exception for %s %s", request.method, request.url.path)
+        raise
+    elapsed = (time.perf_counter() - start) * 1000
+    logger.info("← %s %s %d (%.0fms)", request.method, request.url.path, response.status_code, elapsed)
+    return response
 
 
 @app.on_event("startup")
 async def startup_event():
     init_db()
+    logger.info("API démarrée — modèle=%s", os.getenv("LLM_MODEL", "claude-sonnet-4-20250514"))
 
 
 @app.get("/")

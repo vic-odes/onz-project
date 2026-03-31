@@ -2,6 +2,7 @@ import os
 import io
 import base64
 import json
+import logging
 import litellm
 from dotenv import load_dotenv
 
@@ -9,6 +10,7 @@ load_dotenv(override=True)
 
 litellm.drop_params = True
 
+logger = logging.getLogger(__name__)
 MODEL = os.getenv("LLM_MODEL", "claude-sonnet-4-20250514")
 
 SYSTEM_PROMPT = """
@@ -113,15 +115,30 @@ def _extract_text_from_pdfs(pdfs_b64: list[str]) -> str:
 
 
 async def _call_llm(messages: list, extra: dict) -> str:
-    response = await litellm.acompletion(
-        model=MODEL,
-        messages=messages,
-        max_tokens=8000,
-        temperature=0.3,
-        **extra,
-    )
-    raw = response.choices[0].message.content
-    return raw.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
+    logger.debug("Appel LLM — modèle=%s messages=%d extra_keys=%s", MODEL, len(messages), list(extra.keys()))
+    try:
+        response = await litellm.acompletion(
+            model=MODEL,
+            messages=messages,
+            max_tokens=8000,
+            temperature=0.3,
+            **extra,
+        )
+    except Exception:
+        logger.exception("Erreur lors de l'appel LiteLLM (modèle=%s)", MODEL)
+        raise
+    content = response.choices[0].message.content
+    logger.debug("Réponse LLM reçue — finish_reason=%s content_len=%s",
+                 response.choices[0].finish_reason,
+                 len(content) if content else "None")
+    if not content:
+        logger.error("Le modèle a retourné un contenu vide (finish_reason=%s)", response.choices[0].finish_reason)
+        raise ValueError("Le modèle a retourné une réponse vide.")
+    raw = content.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
+    if not raw:
+        logger.error("Contenu vide après nettoyage des balises markdown. Contenu brut: %r", content[:200])
+        raise ValueError("Le modèle a retourné une réponse vide après nettoyage des balises.")
+    return raw
 
 
 async def generate_project_content(project_data: dict, reference_pdfs: list[str] | None = None) -> dict:
@@ -170,13 +187,16 @@ async def generate_project_content(project_data: dict, reference_pdfs: list[str]
     except Exception as e:
         # Fallback : le modèle ne supporte pas les documents — extraction texte + retry
         if reference_pdfs:
+            logger.warning("Échec appel natif avec PDFs (%s) — bascule sur extraction texte", type(e).__name__)
             extracted = _extract_text_from_pdfs(reference_pdfs)
             if extracted:
+                logger.info("Texte extrait des PDFs — %d caractères", len(extracted))
                 fallback_prompt = (
                     user_prompt
                     + f"\n\nDocuments de référence (texte extrait) :\n{extracted}"
                 )
             else:
+                logger.warning("Aucun texte extrait des PDFs — génération sans documents")
                 fallback_prompt = user_prompt
             fallback_messages = [
                 {"role": "system", "content": SYSTEM_PROMPT},
@@ -184,6 +204,13 @@ async def generate_project_content(project_data: dict, reference_pdfs: list[str]
             ]
             raw = await _call_llm(fallback_messages, extra)
         else:
+            logger.exception("Erreur génération sans PDFs — pas de fallback possible")
             raise
 
-    return json.loads(raw)
+    try:
+        result = json.loads(raw)
+        logger.debug("JSON parsé avec succès — %d clés de premier niveau", len(result))
+        return result
+    except json.JSONDecodeError:
+        logger.error("JSON invalide retourné. Début du contenu brut: %r", raw[:500])
+        raise
