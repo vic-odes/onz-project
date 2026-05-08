@@ -14,10 +14,20 @@ _MAX_EXTRACTED_CHARS = 3000
 
 
 def _compute_max_tokens(supports_native_pdf: bool) -> int:
-    """Sortie : 8000 tokens si Claude (réponses longues OK), sinon plafonné par LLM_MAX_TOKENS."""
-    if supports_native_pdf:
-        return 8000
-    return int(os.getenv("LLM_MAX_TOKENS", "4096"))
+    """Retourne le plafond de tokens à passer au modèle.
+
+    Le JSON complet d'un projet dépasse régulièrement 4 000 tokens —
+    4096 (ancienne valeur par défaut) provoque des troncatures systématiques.
+    On utilise 8000 comme base pour tous les modèles ; la variable
+    `LLM_MAX_TOKENS` permet de surcharger vers le haut ou vers le bas selon
+    les contraintes de la licence / du plan.
+    """
+    env_val = os.getenv("LLM_MAX_TOKENS")
+    if env_val:
+        return int(env_val)
+    # Claude supporte de grandes sorties nativement ; 8000 convient aussi aux
+    # modèles tiers bien configurés (GPT-4o, Gemini Pro, Mistral Large…).
+    return 8000
 
 
 # Les prompts vivent dans backend/prompts/*.md (chargement paresseux + cache).
