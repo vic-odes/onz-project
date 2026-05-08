@@ -335,7 +335,7 @@ Ces chantiers ont été identifiés lors d'un audit. Ils ne sont **pas** à atta
 
 6. ~~**`MODEL` lu à chaud**~~ — ✅ implémenté (`get_model()`, `supports_native_pdf()`, `_compute_max_tokens()` lus par appel ; modifier `LLM_MODEL` n'exige plus de redémarrage de code).
 
-7. **Externaliser les prompts** — `SYSTEM_PROMPT`, `PREFILL_PROMPT`, structure JSON cible sont en dur dans le `.py`. → `prompts/*.md` + petit registry, faciliter le versioning et l'A/B test.
+7. ~~**Externaliser les prompts**~~ — ✅ implémenté (`backend/prompts/*.md` chargés via [`services/prompts.py`](backend/services/prompts.py) avec cache `lru_cache`). Plus aucun prompt en dur dans `ai_service.py` ou `routers/documents.py`. Pour modifier un prompt : éditer le `.md` correspondant et redémarrer le process (cache).
 
 8. **Tests automatisés** — ni pytest ni Vitest/Playwright. Au minimum : tests unitaires `docx_service` (avec un dict `generated` figé), tests contractuels sur la sortie LLM.
 
@@ -360,7 +360,7 @@ Ces chantiers ont été identifiés lors d'un audit. Ils ne sont **pas** à atta
 
 ### 🟢 UX / Frontend
 
-16. **Auto-save formulaire** — rechargement = perte. → `localStorage` + restauration.
+16. ~~**Auto-save formulaire**~~ — ✅ implémenté ([`Stepper.tsx`](frontend/components/Stepper.tsx) — clé `onz_form_draft_v1` dans `localStorage`, restauration au montage avec bandeau « Brouillon restauré » + bouton réinitialiser, purge automatique sur génération réussie ou nouveau projet).
 
 17. **Prévisualisation + édition** — l'utilisateur reçoit un `.docx` figé. Manque : preview HTML du contenu, régénération section par section, mini-éditeur WYSIWYG (TipTap) pour ajustements avant export.
 
@@ -368,11 +368,11 @@ Ces chantiers ont été identifiés lors d'un audit. Ils ne sont **pas** à atta
 
 19. **A11y** — aucun `aria-*`, pas de gestion de focus dans le stepper, `alert/confirm` natifs. → Toasts (sonner / react-hot-toast), modale custom, focus management.
 
-20. **Centraliser les constantes** — listes `SECTEURS`/`BAILLEURS` dupliquées entre `Stepper.tsx` et `ProjectCard.tsx`. → `lib/constants.ts`.
+20. ~~**Centraliser les constantes**~~ — ✅ implémenté ([`frontend/lib/constants.ts`](frontend/lib/constants.ts) — `SECTEURS`, `BAILLEURS`, `SECTOR_COLORS`, `STEP_LABELS` ; types dérivés via `as const`). Importé par `Stepper.tsx` et `ProjectCard.tsx`.
 
 ### 🔵 DevOps & observabilité
 
-21. **Healthcheck Docker** — l'endpoint `/health` existe mais n'est pas câblé dans `docker-compose.yml`.
+21. ~~**Healthcheck Docker**~~ — ✅ implémenté (`docker-compose.yml` : healthcheck backend via `python urllib` sur `/health`, frontend via `node http` ; `frontend.depends_on.backend` est passé en `condition: service_healthy`).
 
 22. **Logs structurés (JSON)** — actuellement format texte. → `structlog`, parsable par Loki/Datadog.
 

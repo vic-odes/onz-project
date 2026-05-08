@@ -8,35 +8,15 @@ from pydantic import BaseModel, field_validator
 
 from dependencies import get_current_user
 from models.user import User
-from services import llm_client
+from services import llm_client, prompts
 from services.pdf_validation import validate_pdf_b64, PdfValidationError
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-PREFILL_PROMPT = """Analyse ce document PDF et extrais les informations du projet de développement qu'il contient.
-
-Retourne UNIQUEMENT un objet JSON avec les champs que tu trouves clairement dans le document, parmi :
-- nom : nom du projet (string)
-- pays : pays ou zone d'intervention (string)
-- secteur : secteur parmi Santé, Éducation, Agriculture, Environnement, Eau & Assainissement, Gouvernance, Protection sociale, Autre (string)
-- bailleur : nom du bailleur de fonds (string)
-- probleme_principal : problème principal décrit dans le document (string)
-- objectif_global : objectif global ou impact visé (string)
-- objectifs_specifiques : liste d'objectifs spécifiques (array de strings)
-- population_cible : population ciblée (string)
-- nombre_beneficiaires : nombre de bénéficiaires (integer)
-- duree_mois : durée du projet en mois (integer)
-- budget_total : budget total en USD (number)
-- source_financement : source de financement principale (string)
-- contraintes : contraintes identifiées (string)
-- risques_identifies : risques identifiés (string)
-
-Règles strictes :
-- N'invente RIEN. N'inclus un champ QUE si l'information est clairement et explicitement présente.
-- Si tu n'es pas sûr d'une valeur, ne l'inclus pas.
-- Réponds UNIQUEMENT en JSON valide, sans markdown ni backticks.
-"""
+# Prompt externalisé dans backend/prompts/prefill.md (chargement paresseux + cache).
+def _prefill_prompt() -> str:
+    return prompts.load("prefill")
 
 _PREFILL_MAX_TOKENS = 2000
 _PREFILL_TEMPERATURE = 0.1
@@ -85,7 +65,7 @@ async def prefill_from_pdf(
             {"type": "document", "source": {
                 "type": "base64", "media_type": "application/pdf", "data": payload.pdf_b64,
             }},
-            {"type": "text", "text": PREFILL_PROMPT},
+            {"type": "text", "text": _prefill_prompt()},
         ]},
     ]
 
@@ -106,7 +86,7 @@ async def prefill_from_pdf(
         raise HTTPException(status_code=400, detail=f"Impossible de lire le PDF : {ex}")
 
     fallback_messages = [
-        {"role": "user", "content": f"{PREFILL_PROMPT}\n\nContenu du document :\n{text}"},
+        {"role": "user", "content": f"{_prefill_prompt()}\n\nContenu du document :\n{text}"},
     ]
     try:
         return await _call_prefill_llm(fallback_messages)

@@ -1,22 +1,12 @@
 "use client";
 import { ProjectSummary, deleteProject, downloadProject } from "@/lib/api";
+import { SECTOR_COLORS } from "@/lib/constants";
 import { useState } from "react";
 
 interface ProjectCardProps {
   project: ProjectSummary;
   onDelete: (id: number) => void;
 }
-
-const sectorColors: Record<string, string> = {
-  Santé: "bg-red-100 text-red-700",
-  Éducation: "bg-blue-100 text-blue-700",
-  Agriculture: "bg-yellow-100 text-yellow-700",
-  Environnement: "bg-green-100 text-green-700",
-  "Eau & Assainissement": "bg-cyan-100 text-cyan-700",
-  Gouvernance: "bg-purple-100 text-purple-700",
-  "Protection sociale": "bg-orange-100 text-orange-700",
-  Autre: "bg-gray-100 text-gray-700",
-};
 
 export default function ProjectCard({ project, onDelete }: ProjectCardProps) {
   const [deleting, setDeleting] = useState(false);
@@ -58,7 +48,7 @@ export default function ProjectCard({ project, onDelete }: ProjectCardProps) {
     year: "numeric",
   });
 
-  const sectorClass = sectorColors[project.secteur] ?? "bg-gray-100 text-gray-700";
+  const sectorClass = SECTOR_COLORS[project.secteur] ?? "bg-gray-100 text-gray-700";
 
   return (
     <div className="card hover:shadow-lg transition-shadow flex flex-col gap-4">

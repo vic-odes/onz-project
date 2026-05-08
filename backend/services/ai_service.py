@@ -4,7 +4,7 @@ import json
 import logging
 import os
 
-from services import llm_client
+from services import llm_client, prompts
 
 logger = logging.getLogger(__name__)
 
@@ -18,88 +18,19 @@ def _compute_max_tokens(supports_native_pdf: bool) -> int:
         return 8000
     return int(os.getenv("LLM_MAX_TOKENS", "4096"))
 
-SYSTEM_PROMPT = """
-Tu es un expert senior en montage de projets de développement international,
-avec 20 ans d'expérience auprès de bailleurs comme l'AFD, l'Union Européenne,
-la Banque Mondiale et le PNUD.
 
-Tu maîtrises parfaitement :
-- Le cadre logique (Logical Framework Approach)
-- Les indicateurs SMART
-- L'analyse des parties prenantes
-- La gestion axée sur les résultats (GAR)
-- L'analyse coût-bénéfice des projets de développement
-- Les standards de rédaction de chaque bailleur
-
-Réponds UNIQUEMENT en JSON valide, sans markdown ni backticks.
-Toutes les sections doivent être rédigées en français professionnel.
-Ne laisse aucune section vide. Si une information manque, complète intelligemment
-sur la base du secteur et du pays fournis.
-"""
+# Les prompts vivent dans backend/prompts/*.md (chargement paresseux + cache).
+def _system_prompt() -> str:
+    return prompts.load("system_generate")
 
 
 def _build_user_prompt(project_data: dict, has_references: bool) -> str:
-    reference_note = (
-        "\nLes documents de référence joints (rapports précédents, appels à projets, "
-        "guidelines du bailleur) doivent guider et enrichir le contenu généré. "
-        "Tiens compte de leur contenu, de leur structure et de leur terminologie.\n"
-        if has_references else ""
+    template = prompts.load("user_generate")
+    reference_note = "\n" + prompts.load("reference_note") + "\n" if has_references else ""
+    return template.format(
+        project_data_json=json.dumps(project_data, ensure_ascii=False, indent=2),
+        reference_note=reference_note,
     )
-    return f"""
-Génère un document complet de projet de développement international basé sur ces informations :
-
-{json.dumps(project_data, ensure_ascii=False, indent=2)}
-{reference_note}
-Réponds avec un objet JSON contenant exactement ces clés :
-{{
-  "introduction": "...",
-  "cadre_logique": {{
-    "objectif_global": "...",
-    "objectifs_specifiques": [],
-    "resultats": [],
-    "activites": [],
-    "indicateurs_smart": [],
-    "sources_verification": [],
-    "hypotheses": []
-  }},
-  "parties_prenantes": [],
-  "activites_detaillees": [],
-  "chronogramme": [],
-  "budget": {{
-    "lignes": [],
-    "total_usd": 0,
-    "couts_directs": 0,
-    "couts_indirects": 0
-  }},
-  "analyse_cout_benefice": {{
-    "van": 0,
-    "ratio_cout_benefice": 0,
-    "scenario_central": "...",
-    "scenario_pessimiste": "...",
-    "justification": "..."
-  }},
-  "risques": [],
-  "communication": "...",
-  "note_conceptuelle": "...",
-  "resume_executif": "..."
-}}
-
-Règles importantes :
-- introduction : minimum 300 mots, contexte pays + problématique + justification
-- cadre_logique.objectifs_specifiques : liste de chaînes de caractères
-- cadre_logique.resultats : liste de chaînes de caractères
-- cadre_logique.activites : liste de chaînes de caractères
-- cadre_logique.indicateurs_smart : liste de chaînes de caractères (format : Indicateur - Baseline - Cible - Délai)
-- cadre_logique.sources_verification : liste de chaînes de caractères
-- cadre_logique.hypotheses : liste de chaînes de caractères
-- parties_prenantes : liste d'objets avec clés "nom", "role", "interet", "influence" (Faible/Moyen/Fort)
-- activites_detaillees : liste d'objets avec clés "titre", "description", "responsable", "duree", "objectif_lie"
-- chronogramme : liste d'objets avec clés "trimestre" (T1, T2...), "activites" (liste de chaînes)
-- budget.lignes : liste d'objets avec clés "categorie", "description", "montant_usd", "pourcentage"
-- risques : liste d'objets avec clés "risque", "probabilite" (Faible/Moyen/Élevé), "impact" (Faible/Moyen/Élevé), "mitigation"
-- note_conceptuelle : résumé 1 page si generer_note_conceptuelle est true, sinon chaîne vide
-- resume_executif : synthèse 500 mots si inclure_resume_executif est true, sinon chaîne vide
-"""
 
 
 def _extract_text_from_pdfs(pdfs_b64: list[str]) -> str:
@@ -149,7 +80,7 @@ async def generate_project_content(project_data: dict, reference_pdfs: list[str]
         ]
         pdf_blocks.append({"type": "text", "text": user_prompt})
         messages = [
-            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "system", "content": _system_prompt()},
             {"role": "user", "content": pdf_blocks},
         ]
     elif reference_pdfs:
@@ -166,12 +97,12 @@ async def generate_project_content(project_data: dict, reference_pdfs: list[str]
         else:
             logger.warning("Aucun texte extrait des PDFs — génération sans documents")
         messages = [
-            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "system", "content": _system_prompt()},
             {"role": "user", "content": user_prompt},
         ]
     else:
         messages = [
-            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "system", "content": _system_prompt()},
             {"role": "user", "content": user_prompt},
         ]
 
@@ -188,7 +119,7 @@ async def generate_project_content(project_data: dict, reference_pdfs: list[str]
                 logger.info("Texte extrait (fallback) — %d caractères", len(extracted_truncated))
                 fallback_prompt = user_prompt + f"\n\nDocuments de référence (texte extrait) :\n{extracted_truncated}"
             fallback_messages = [
-                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "system", "content": _system_prompt()},
                 {"role": "user", "content": fallback_prompt},
             ]
             raw = await llm_client.call_llm(fallback_messages, max_tokens=max_tokens)
