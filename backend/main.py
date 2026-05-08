@@ -3,8 +3,9 @@ import logging
 import time
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from routers import generate, projects, documents
+from routers import generate, projects, documents, auth
 from database import init_db
+from middleware import BodySizeLimitMiddleware
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -16,10 +17,10 @@ logging.basicConfig(
     force=True,
 )
 # Réduire le bruit des bibliothèques tierces
-logging.getLogger("httpx").setLevel(logging.WARNING)
-logging.getLogger("httpcore").setLevel(logging.WARNING)
-# logging.getLogger("litellm").setLevel(logging.WARNING)
-logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
+for _lib in ("httpx", "httpcore", "litellm", "LiteLLM",
+             "openai", "openai._base_client", "uvicorn.access"):
+    logging.getLogger(_lib).setLevel(logging.WARNING)
+
 logger = logging.getLogger("main")
 
 app = FastAPI(
@@ -35,10 +36,14 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type"],
+    expose_headers=["Content-Disposition"],  # nécessaire au téléchargement du .docx côté navigateur
+    max_age=600,
 )
+app.add_middleware(BodySizeLimitMiddleware)
 
+app.include_router(auth.router, prefix="/api/auth", tags=["Authentification"])
 app.include_router(generate.router, prefix="/api/generate", tags=["Génération"])
 app.include_router(projects.router, prefix="/api/projects", tags=["Projets"])
 app.include_router(documents.router, prefix="/api/documents", tags=["Documents"])
@@ -61,6 +66,11 @@ async def log_requests(request: Request, call_next):
 @app.on_event("startup")
 async def startup_event():
     init_db()
+    if not os.getenv("JWT_SECRET_KEY"):
+        logger.error(
+            "JWT_SECRET_KEY n'est pas défini — l'authentification échouera. "
+            "Génère un secret avec : python -c \"import secrets; print(secrets.token_urlsafe(64))\""
+        )
     logger.info("API démarrée — modèle=%s", os.getenv("LLM_MODEL", "claude-sonnet-4-20250514"))
 
 

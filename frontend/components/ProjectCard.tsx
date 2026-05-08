@@ -1,5 +1,5 @@
 "use client";
-import { ProjectSummary, deleteProject } from "@/lib/api";
+import { ProjectSummary, deleteProject, downloadProject } from "@/lib/api";
 import { useState } from "react";
 
 interface ProjectCardProps {
@@ -20,6 +20,7 @@ const sectorColors: Record<string, string> = {
 
 export default function ProjectCard({ project, onDelete }: ProjectCardProps) {
   const [deleting, setDeleting] = useState(false);
+  const [downloading, setDownloading] = useState(false);
 
   const handleDelete = async () => {
     if (!confirm(`Supprimer le projet "${project.nom}" ?`)) return;
@@ -31,6 +32,23 @@ export default function ProjectCard({ project, onDelete }: ProjectCardProps) {
       alert("Impossible de supprimer ce projet.");
     } finally {
       setDeleting(false);
+    }
+  };
+
+  const handleDownload = async () => {
+    setDownloading(true);
+    try {
+      const blob = await downloadProject(project.id);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${project.nom.replace(/\s+/g, "_")}_ONZ.docx`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      alert("Document non disponible.");
+    } finally {
+      setDownloading(false);
     }
   };
 
@@ -67,7 +85,19 @@ export default function ProjectCard({ project, onDelete }: ProjectCardProps) {
       <p className="font-source text-xs text-gray-400">Créé le {date}</p>
 
       <div className="flex gap-2 mt-auto">
+        {project.docx_path && (
+          <button
+            type="button"
+            onClick={handleDownload}
+            disabled={downloading}
+            className="flex-1 border border-vert-sauge text-vert-sauge rounded-lg py-2 text-sm font-semibold
+                       hover:bg-vert-sauge hover:text-white transition-colors font-source disabled:opacity-50"
+          >
+            {downloading ? "..." : "⬇ Télécharger"}
+          </button>
+        )}
         <button
+          type="button"
           onClick={handleDelete}
           disabled={deleting}
           className="flex-1 border border-red-300 text-red-500 rounded-lg py-2 text-sm font-semibold

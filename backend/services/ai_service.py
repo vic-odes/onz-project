@@ -1,17 +1,22 @@
-import os
 import io
 import base64
 import json
 import logging
-import litellm
-from dotenv import load_dotenv
+import os
 
-load_dotenv(override=True)
-
-litellm.drop_params = True
+from services import llm_client
 
 logger = logging.getLogger(__name__)
-MODEL = os.getenv("LLM_MODEL", "claude-sonnet-4-20250514")
+
+# Limite du texte extrait pour éviter le dépassement de contexte (indépendante du modèle)
+_MAX_EXTRACTED_CHARS = 3000
+
+
+def _compute_max_tokens(supports_native_pdf: bool) -> int:
+    """Sortie : 8000 tokens si Claude (réponses longues OK), sinon plafonné par LLM_MAX_TOKENS."""
+    if supports_native_pdf:
+        return 8000
+    return int(os.getenv("LLM_MAX_TOKENS", "4096"))
 
 SYSTEM_PROMPT = """
 Tu es un expert senior en montage de projets de développement international,
@@ -114,53 +119,24 @@ def _extract_text_from_pdfs(pdfs_b64: list[str]) -> str:
     return "\n\n".join(texts)
 
 
-async def _call_llm(messages: list, extra: dict) -> str:
-    logger.debug("Appel LLM — modèle=%s messages=%d extra_keys=%s", MODEL, len(messages), list(extra.keys()))
-    try:
-        response = await litellm.acompletion(
-            model=MODEL,
-            messages=messages,
-            max_tokens=8000,
-            temperature=0.3,
-            **extra,
-        )
-    except Exception:
-        logger.exception("Erreur lors de l'appel LiteLLM (modèle=%s)", MODEL)
-        raise
-    content = response.choices[0].message.content
-    logger.debug("Réponse LLM reçue — finish_reason=%s content_len=%s",
-                 response.choices[0].finish_reason,
-                 len(content) if content else "None")
-    if not content:
-        logger.error("Le modèle a retourné un contenu vide (finish_reason=%s)", response.choices[0].finish_reason)
-        raise ValueError("Le modèle a retourné une réponse vide.")
-    raw = content.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
-    if not raw:
-        logger.error("Contenu vide après nettoyage des balises markdown. Contenu brut: %r", content[:200])
-        raise ValueError("Le modèle a retourné une réponse vide après nettoyage des balises.")
-    return raw
-
-
 async def generate_project_content(project_data: dict, reference_pdfs: list[str] | None = None) -> dict:
     """
     Génère le contenu complet du projet via LiteLLM.
     Si des PDFs de référence sont fournis, ils sont envoyés directement au modèle.
     En cas d'échec (modèle non-vision), le texte est extrait et réinjecté dans le prompt.
-    """
-    # Paramètres Azure passés explicitement si disponibles
-    extra = {}
-    if os.getenv("AZURE_API_KEY"):
-        extra["api_key"] = os.getenv("AZURE_API_KEY")
-    if os.getenv("AZURE_API_BASE"):
-        extra["api_base"] = os.getenv("AZURE_API_BASE")
-    if os.getenv("AZURE_API_VERSION"):
-        extra["api_version"] = os.getenv("AZURE_API_VERSION")
 
+    Les capacités du modèle (PDF natif, max_tokens) sont relues à chaque appel pour
+    permettre le hot-swap de `LLM_MODEL` sans redémarrage.
+    """
+    supports_native_pdf = llm_client.supports_native_pdf()
+    max_tokens = _compute_max_tokens(supports_native_pdf)
     user_prompt = _build_user_prompt(project_data, bool(reference_pdfs))
 
-    # Construction des messages — avec documents natifs si PDFs fournis
-    if reference_pdfs:
-        content: list = [
+    # Construction des messages
+    # Les blocs "document" natifs ne sont supportés que par Anthropic/Claude
+    if reference_pdfs and supports_native_pdf:
+        logger.debug("Mode PDF natif (Claude) — %d document(s)", len(reference_pdfs))
+        pdf_blocks: list = [
             {
                 "type": "document",
                 "source": {
@@ -171,10 +147,27 @@ async def generate_project_content(project_data: dict, reference_pdfs: list[str]
             }
             for pdf_b64 in reference_pdfs
         ]
-        content.append({"type": "text", "text": user_prompt})
+        pdf_blocks.append({"type": "text", "text": user_prompt})
         messages = [
             {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": content},
+            {"role": "user", "content": pdf_blocks},
+        ]
+    elif reference_pdfs:
+        # Modèle non-Claude : extraction directe sans aller-retour inutile
+        logger.debug("Mode extraction texte (non-Claude) — %d document(s)", len(reference_pdfs))
+        extracted = _extract_text_from_pdfs(reference_pdfs)
+        if extracted:
+            extracted_truncated = extracted[:_MAX_EXTRACTED_CHARS]
+            if len(extracted) > _MAX_EXTRACTED_CHARS:
+                logger.info("Texte extrait tronqué à %d/%d caractères", _MAX_EXTRACTED_CHARS, len(extracted))
+            else:
+                logger.info("Texte extrait — %d caractères", len(extracted))
+            user_prompt = user_prompt + f"\n\nDocuments de référence (texte extrait) :\n{extracted_truncated}"
+        else:
+            logger.warning("Aucun texte extrait des PDFs — génération sans documents")
+        messages = [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": user_prompt},
         ]
     else:
         messages = [
@@ -183,34 +176,35 @@ async def generate_project_content(project_data: dict, reference_pdfs: list[str]
         ]
 
     try:
-        raw = await _call_llm(messages, extra)
+        raw = await llm_client.call_llm(messages, max_tokens=max_tokens)
     except Exception as e:
-        # Fallback : le modèle ne supporte pas les documents — extraction texte + retry
-        if reference_pdfs:
-            logger.warning("Échec appel natif avec PDFs (%s) — bascule sur extraction texte", type(e).__name__)
+        # Fallback uniquement pour Claude (si le modèle refuse les document blocks)
+        if reference_pdfs and supports_native_pdf:
+            logger.warning("Échec PDF natif Claude (%s) — bascule sur extraction texte", type(e).__name__)
             extracted = _extract_text_from_pdfs(reference_pdfs)
+            fallback_prompt = user_prompt
             if extracted:
-                logger.info("Texte extrait des PDFs — %d caractères", len(extracted))
-                fallback_prompt = (
-                    user_prompt
-                    + f"\n\nDocuments de référence (texte extrait) :\n{extracted}"
-                )
-            else:
-                logger.warning("Aucun texte extrait des PDFs — génération sans documents")
-                fallback_prompt = user_prompt
+                extracted_truncated = extracted[:_MAX_EXTRACTED_CHARS]
+                logger.info("Texte extrait (fallback) — %d caractères", len(extracted_truncated))
+                fallback_prompt = user_prompt + f"\n\nDocuments de référence (texte extrait) :\n{extracted_truncated}"
             fallback_messages = [
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": fallback_prompt},
             ]
-            raw = await _call_llm(fallback_messages, extra)
+            raw = await llm_client.call_llm(fallback_messages, max_tokens=max_tokens)
         else:
-            logger.exception("Erreur génération sans PDFs — pas de fallback possible")
+            logger.exception("Erreur génération — pas de fallback possible")
             raise
 
-    try:
-        result = json.loads(raw)
-        logger.debug("JSON parsé avec succès — %d clés de premier niveau", len(result))
-        return result
-    except json.JSONDecodeError:
-        logger.error("JSON invalide retourné. Début du contenu brut: %r", raw[:500])
-        raise
+    result = llm_client.parse_json_response(raw)
+    logger.debug("JSON parsé avec succès — %d clés de premier niveau", len(result))
+
+    # Validation Pydantic : top-level strict, nested permissif. Évite les sections
+    # silencieusement vides côté docx_service quand le modèle a oublié des clés.
+    from schemas.generated import GeneratedContent
+    validated = GeneratedContent.model_validate(result)
+    logger.info(
+        "Sortie LLM validée — %d parties_prenantes, %d activités, %d risques",
+        len(validated.parties_prenantes), len(validated.activites_detaillees), len(validated.risques),
+    )
+    return validated.model_dump()
