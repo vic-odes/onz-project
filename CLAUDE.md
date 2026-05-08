@@ -107,7 +107,19 @@ docker compose up --build
 Le réseau `dokploy-network` doit exister (`docker network create dokploy-network` si besoin).
 
 ### Tests
-> Aucun test automatisé n'est encore configuré — ne pas inventer de commande `pytest` / `vitest` tant que la cible n'a pas été décidée.
+Backend : suite pytest dans [`backend/tests/`](backend/tests/) — couvre les modules purs
+(`pdf_validation`, `prompts`, `schemas/generated`, `auth_service`). Pas de mock LLM/DB pour l'instant.
+
+```bash
+cd backend
+pip install -r requirements-dev.txt   # ajoute pytest + pytest-asyncio
+pytest -q                              # depuis backend/, lit pytest.ini
+```
+
+[`tests/conftest.py`](backend/tests/conftest.py) ajoute `backend/` à `sys.path` et
+définit un `JWT_SECRET_KEY` déterministe pour les tests qui en ont besoin.
+
+Frontend : aucun test (Vitest / Playwright à décider).
 
 ---
 
@@ -288,7 +300,7 @@ le startup va échouer car Alembic essaiera de recréer les tables. Solutions :
 |---|---|
 | Auth | ✅ JWT (HS256, 24 h) — backend + frontend (login/register/logout, AuthGuard) |
 | Limites upload PDF | ✅ 10 MB / fichier, 30 MB total, max 5 fichiers, magic-bytes vérifiées + body 50 MB max |
-| Tests | ❌ aucun |
+| Tests | 🟡 backend pytest (4 modules, 31 tests) — frontend ❌ |
 | CI/CD | ❌ aucun |
 | Migrations DB | ✅ Alembic, exécuté automatiquement au startup |
 | CORS | ✅ origines + méthodes + headers en allowlist explicite |
@@ -337,7 +349,7 @@ Ces chantiers ont été identifiés lors d'un audit. Ils ne sont **pas** à atta
 
 7. ~~**Externaliser les prompts**~~ — ✅ implémenté (`backend/prompts/*.md` chargés via [`services/prompts.py`](backend/services/prompts.py) avec cache `lru_cache`). Plus aucun prompt en dur dans `ai_service.py` ou `routers/documents.py`. Pour modifier un prompt : éditer le `.md` correspondant et redémarrer le process (cache).
 
-8. **Tests automatisés** — ni pytest ni Vitest/Playwright. Au minimum : tests unitaires `docx_service` (avec un dict `generated` figé), tests contractuels sur la sortie LLM.
+8. **Tests automatisés** — 🟡 partiellement implémenté côté backend ([`tests/`](backend/tests/) — 31 tests sur `pdf_validation`, `prompts`, `schemas/generated`, `auth_service`). Restent à écrire : tests `docx_service` (avec dict `generated` figé), tests d'intégration FastAPI (TestClient), tests contractuels mockant le LLM, et toute la stack frontend (Vitest/Playwright).
 
 9. ~~**Validation de la sortie LLM**~~ — ✅ implémenté ([`schemas/generated.py`](backend/schemas/generated.py) ; top-level strict, nested permissif ; `JSONDecodeError`/`ValidationError` → HTTP 502 avec champs incriminés). Retry/repair non implémenté — chantier à part.
 
