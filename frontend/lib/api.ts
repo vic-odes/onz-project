@@ -152,6 +152,135 @@ export async function generateDocument(data: ProjectFormData): Promise<Blob> {
   return response.blob();
 }
 
+// ─────────────────────────────────────────────────────────────────────────
+// Génération en streaming (SSE)
+// ─────────────────────────────────────────────────────────────────────────
+
+export type StreamPhase = "generation" | "docx" | "persistance";
+
+export interface StreamProgressEvent {
+  type: "phase" | "progress";
+  phase: StreamPhase;
+  /** Libellé localisé renvoyé par le backend (présent pour `phase`). */
+  label?: string;
+  /** Caractères reçus du LLM (présent pour `progress` pendant la phase generation). */
+  chars?: number;
+}
+
+export interface StreamDoneEvent {
+  project_id: number | null;
+  filename: string;
+  chars: number;
+}
+
+export interface StreamCallbacks {
+  onProgress?: (event: StreamProgressEvent) => void;
+  /** Permet d'annuler le stream depuis l'extérieur. */
+  signal?: AbortSignal;
+}
+
+/**
+ * Lance le pipeline de génération en SSE.
+ *
+ * Résolu avec le payload `done` (project_id + filename) — l'appelant peut alors
+ * télécharger le `.docx` via `downloadProject(project_id)`.
+ *
+ * Rejette avec `ApiError` :
+ *   - status 0 si le serveur émet un event `error` (échec applicatif),
+ *   - status HTTP réel si la connexion échoue avant le stream.
+ */
+export async function generateDocumentStream(
+  data: ProjectFormData,
+  callbacks: StreamCallbacks = {},
+): Promise<StreamDoneEvent> {
+  const token = getStoredToken();
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    Accept: "text/event-stream",
+  };
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+
+  const response = await fetch(`${API_BASE}/api/generate/stream`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(data),
+    signal: callbacks.signal,
+  });
+
+  if (response.status === 401) {
+    clearStoredAuth();
+    throw new UnauthorizedError();
+  }
+  if (!response.ok || !response.body) {
+    throw new ApiError(
+      await readErrorMessage(response, "Erreur lors de la génération du document."),
+      response.status,
+    );
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder("utf-8");
+  let buffer = "";
+  let done: StreamDoneEvent | null = null;
+
+  // Parser SSE minimal : un event = un bloc séparé par "\n\n", lignes "event:" + "data:".
+  while (true) {
+    const { value, done: streamDone } = await reader.read();
+    if (streamDone) break;
+    buffer += decoder.decode(value, { stream: true });
+
+    let sep: number;
+    while ((sep = buffer.indexOf("\n\n")) !== -1) {
+      const record = buffer.slice(0, sep);
+      buffer = buffer.slice(sep + 2);
+
+      let eventName = "message";
+      let dataLine = "";
+      for (const line of record.split("\n")) {
+        if (line.startsWith("event:")) eventName = line.slice(6).trim();
+        else if (line.startsWith("data:")) dataLine += line.slice(5).trim();
+      }
+      if (!dataLine) continue;
+
+      let payload: Record<string, unknown>;
+      try {
+        payload = JSON.parse(dataLine);
+      } catch {
+        continue;  // event mal formé : on ignore plutôt que de tout casser
+      }
+
+      if (eventName === "error") {
+        throw new ApiError(
+          (payload.message as string) || "Erreur de génération.",
+          0,
+        );
+      }
+      if (eventName === "done") {
+        done = payload as unknown as StreamDoneEvent;
+        continue;
+      }
+      if (eventName === "phase") {
+        callbacks.onProgress?.({
+          type: "phase",
+          phase: payload.name as StreamPhase,
+          label: payload.label as string,
+        });
+      } else if (eventName === "progress") {
+        callbacks.onProgress?.({
+          type: "progress",
+          phase: payload.phase as StreamPhase,
+          chars: payload.chars as number,
+        });
+      }
+    }
+  }
+
+  if (!done) {
+    throw new ApiError("Le stream s'est interrompu avant la fin de la génération.", 0);
+  }
+  return done;
+}
+
 export async function listProjects(): Promise<ProjectSummary[]> {
   const response = await apiFetch("/api/projects/");
   if (!response.ok) {

@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
-import { generateDocument, prefillFromPdf, ProjectFormData } from "@/lib/api";
+import { ApiError, downloadProject, generateDocumentStream, prefillFromPdf, ProjectFormData, StreamProgressEvent } from "@/lib/api";
 import { BAILLEURS, SECTEURS, STEP_LABELS } from "@/lib/constants";
 import GenerationLoader from "./GenerationLoader";
 import PdfUpload from "./PdfUpload";
@@ -53,6 +53,7 @@ export default function Stepper() {
   const [generating, setGenerating] = useState(false);
   const [blob, setBlob] = useState<Blob | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [progress, setProgress] = useState<StreamProgressEvent | null>(null);
   const [draftRestored, setDraftRestored] = useState(false);
   const draftLoaded = useRef(false);
 
@@ -182,15 +183,25 @@ export default function Stepper() {
     setGenerating(true);
     setError(null);
     setBlob(null);
+    setProgress(null);
     const allPdfs = [...budgetPdfs, ...referencePdfs];
     try {
-      const result = await generateDocument({
-        ...form,
-        bailleur: form.bailleur === "Autre" ? bailleurCustom : form.bailleur,
-        objectifs_specifiques: form.objectifs_specifiques.filter((o) => o.trim()),
-        reference_pdfs: allPdfs.length > 0 ? allPdfs.map((f) => f.b64) : undefined,
-      });
-      setBlob(result);
+      const done = await generateDocumentStream(
+        {
+          ...form,
+          bailleur: form.bailleur === "Autre" ? bailleurCustom : form.bailleur,
+          objectifs_specifiques: form.objectifs_specifiques.filter((o) => o.trim()),
+          reference_pdfs: allPdfs.length > 0 ? allPdfs.map((f) => f.b64) : undefined,
+        },
+        { onProgress: setProgress },
+      );
+      // Le stream renvoie l'id du projet : on télécharge ensuite le .docx via /projects/{id}/download.
+      // Si la persistance a échoué côté backend, project_id sera null — peu probable mais on remonte alors une erreur claire.
+      if (done.project_id == null) {
+        throw new ApiError("Document généré mais non sauvegardé. Réessayez.", 0);
+      }
+      const docxBlob = await downloadProject(done.project_id);
+      setBlob(docxBlob);
       clearDraft();
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Erreur inconnue");
@@ -208,6 +219,7 @@ export default function Stepper() {
           downloadBlob={blob}
           fileName={fileName}
           error={error}
+          progress={progress}
         />
         {blob && (
           <div className="flex justify-center mt-4">
@@ -216,6 +228,7 @@ export default function Stepper() {
                 setBlob(null);
                 setError(null);
                 setGenerating(false);
+                setProgress(null);
                 setStep(0);
                 setForm(defaultForm);
                 setBailleurCustom("");
@@ -233,13 +246,13 @@ export default function Stepper() {
         {error && (
           <div className="flex justify-center gap-3 mt-4 flex-wrap">
             <button
-              onClick={handleGenerate}
+              onClick={() => { setProgress(null); handleGenerate(); }}
               className="btn-primary"
             >
               ↺ Réessayer
             </button>
             <button
-              onClick={() => { setError(null); setStep(5); }}
+              onClick={() => { setError(null); setProgress(null); setStep(5); }}
               className="btn-secondary"
             >
               ← Modifier le projet
@@ -247,6 +260,7 @@ export default function Stepper() {
             <button
               onClick={() => {
                 setError(null);
+                setProgress(null);
                 setStep(0);
                 setForm(defaultForm);
                 setBailleurCustom("");

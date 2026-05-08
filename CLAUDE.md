@@ -304,7 +304,7 @@ le startup va échouer car Alembic essaiera de recréer les tables. Solutions :
 | CI/CD | ❌ aucun |
 | Migrations DB | ✅ Alembic, exécuté automatiquement au startup |
 | CORS | ✅ origines + méthodes + headers en allowlist explicite |
-| Job queue / async long | ❌ génération bloquante (30-90 s) |
+| Job queue / async long | 🟡 SSE streaming en place (POST /api/generate/stream) — pas encore de queue persistante |
 | Cache LLM | ❌ |
 | Monitoring/Sentry | ❌ |
 | i18n | ❌ français uniquement |
@@ -357,10 +357,12 @@ Ces chantiers ont été identifiés lors d'un audit. Ils ne sont **pas** à atta
 
 ### 🟡 Performance & scalabilité
 
-11. **Génération non bloquante**
-    Aujourd'hui : POST synchrone 30-90 s.
-    - Court terme : SSE / `StreamingResponse` pour afficher la progression section par section.
-    - Moyen terme : job queue (ARQ ou RQ) → `POST /generate` retourne `task_id`, polling ou WebSocket.
+11. ~~**Génération non bloquante (court terme : SSE)**~~ — ✅ implémenté.
+    - Backend : `POST /api/generate/stream` ([`routers/generate.py`](backend/routers/generate.py)) retourne `text/event-stream`. Pipeline `generation` (LiteLLM streamé via [`llm_client.stream_llm`](backend/services/llm_client.py)) → `docx` (via `asyncio.to_thread`) → `persistance` → `done` (avec `project_id`).
+    - Events SSE : `phase` (changement), `progress` (cumul de chars LLM, throttlé à 250 ms via `_PROGRESS_TICK_SECONDS`), `error` (message localisé), `done` (`{project_id, filename, chars}`). Erreurs LLM (truncation, JSON invalide, ValidationError) émises proprement comme events `error` plutôt que comme HTTP 5xx.
+    - Frontend : [`generateDocumentStream`](frontend/lib/api.ts) (fetch + ReadableStream + parser SSE manuel — `EventSource` ne supporte pas POST/Authorization). [`GenerationLoader`](frontend/components/GenerationLoader.tsx) réactif (libellé phase + compteur de caractères + barre `aria-valuenow`). Après `done`, le client télécharge via `/api/projects/{id}/download`.
+    - L'endpoint bloquant `POST /api/generate/` est conservé pour rétrocompat.
+    - Moyen terme (job queue ARQ/RQ) toujours en suspens : utile uniquement si la durée dépasse les timeouts proxy.
 
 12. **Upload multipart au lieu de base64** — base64 = +33 % en transit + double mémoire. → `UploadFile`, streaming sur disque temporaire, suppression après génération.
 
@@ -376,7 +378,7 @@ Ces chantiers ont été identifiés lors d'un audit. Ils ne sont **pas** à atta
 
 17. **Prévisualisation + édition** — l'utilisateur reçoit un `.docx` figé. Manque : preview HTML du contenu, régénération section par section, mini-éditeur WYSIWYG (TipTap) pour ajustements avant export.
 
-18. **Feedback temps réel pendant génération** — `GenerationLoader` est statique. Avec SSE : « Génération de l'introduction… », « Construction du cadre logique… ».
+18. ~~**Feedback temps réel pendant génération**~~ — ✅ implémenté côté UI ([`GenerationLoader`](frontend/components/GenerationLoader.tsx) consomme les events SSE : libellé de phase + caractères cumulés + barre `aria-valuenow`). À enrichir si on découpe la génération en sous-prompts (« introduction… », « cadre logique… ») : aujourd'hui le LLM renvoie un seul gros JSON, on n'a pas de granularité section par section.
 
 19. **A11y** — aucun `aria-*`, pas de gestion de focus dans le stepper, `alert/confirm` natifs. → Toasts (sonner / react-hot-toast), modale custom, focus management.
 

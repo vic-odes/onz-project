@@ -3,6 +3,7 @@ import base64
 import json
 import logging
 import os
+from typing import AsyncIterator, Optional, Tuple
 
 from services import llm_client, prompts
 
@@ -48,6 +49,95 @@ def _extract_text_from_pdfs(pdfs_b64: list[str]) -> str:
         except Exception:
             pass
     return "\n\n".join(texts)
+
+
+def _build_messages(
+    project_data: dict,
+    reference_pdfs: Optional[list[str]],
+    supports_native_pdf: bool,
+) -> Tuple[list, str]:
+    """Construit les messages pour LiteLLM. Retourne (messages, user_prompt) — le prompt
+    nu est gardé séparément pour pouvoir le réinjecter dans le fallback texte."""
+    user_prompt = _build_user_prompt(project_data, bool(reference_pdfs))
+
+    if reference_pdfs and supports_native_pdf:
+        logger.debug("Mode PDF natif (Claude) — %d document(s)", len(reference_pdfs))
+        pdf_blocks: list = [
+            {
+                "type": "document",
+                "source": {"type": "base64", "media_type": "application/pdf", "data": pdf_b64},
+            }
+            for pdf_b64 in reference_pdfs
+        ]
+        pdf_blocks.append({"type": "text", "text": user_prompt})
+        messages = [
+            {"role": "system", "content": _system_prompt()},
+            {"role": "user", "content": pdf_blocks},
+        ]
+    elif reference_pdfs:
+        logger.debug("Mode extraction texte (non-Claude) — %d document(s)", len(reference_pdfs))
+        extracted = _extract_text_from_pdfs(reference_pdfs)
+        if extracted:
+            extracted_truncated = extracted[:_MAX_EXTRACTED_CHARS]
+            if len(extracted) > _MAX_EXTRACTED_CHARS:
+                logger.info("Texte extrait tronqué à %d/%d caractères", _MAX_EXTRACTED_CHARS, len(extracted))
+            user_prompt = user_prompt + f"\n\nDocuments de référence (texte extrait) :\n{extracted_truncated}"
+        else:
+            logger.warning("Aucun texte extrait des PDFs — génération sans documents")
+        messages = [
+            {"role": "system", "content": _system_prompt()},
+            {"role": "user", "content": user_prompt},
+        ]
+    else:
+        messages = [
+            {"role": "system", "content": _system_prompt()},
+            {"role": "user", "content": user_prompt},
+        ]
+    return messages, user_prompt
+
+
+def _validate_generated(raw: str) -> dict:
+    """Parse + valide une réponse LLM. Lève JSONDecodeError ou ValidationError."""
+    cleaned = llm_client.strip_markdown_fences(raw)
+    if not cleaned:
+        raise ValueError("Le modèle a retourné une réponse vide après nettoyage.")
+    result = llm_client.parse_json_response(cleaned)
+    logger.debug("JSON parsé avec succès — %d clés de premier niveau", len(result))
+    from schemas.generated import GeneratedContent
+    validated = GeneratedContent.model_validate(result)
+    logger.info(
+        "Sortie LLM validée — %d parties_prenantes, %d activités, %d risques",
+        len(validated.parties_prenantes), len(validated.activites_detaillees), len(validated.risques),
+    )
+    return validated.model_dump()
+
+
+async def stream_project_content(
+    project_data: dict,
+    reference_pdfs: Optional[list[str]] = None,
+) -> AsyncIterator[Tuple[str, dict]]:
+    """Variante streaming de `generate_project_content`.
+
+    Yield des tuples `(event, payload)` :
+      - ("token", {"chars": int})        — un delta texte vient d'arriver
+      - ("validated", {"content": dict}) — JSON validé prêt pour docx_service
+
+    Pas de fallback PDF natif → texte ici (la complexité d'un retry mid-stream
+    n'apporte pas grand-chose : si le modèle non-Claude refuse les blocks
+    `document`, on aura déjà extrait le texte côté `_build_messages`).
+    """
+    supports_native_pdf = llm_client.supports_native_pdf()
+    max_tokens = _compute_max_tokens(supports_native_pdf)
+    messages, _ = _build_messages(project_data, reference_pdfs, supports_native_pdf)
+
+    chunks: list[str] = []
+    async for delta in llm_client.stream_llm(messages, max_tokens=max_tokens):
+        chunks.append(delta)
+        yield ("token", {"chars": len(delta)})
+
+    raw = "".join(chunks)
+    validated = _validate_generated(raw)
+    yield ("validated", {"content": validated})
 
 
 async def generate_project_content(project_data: dict, reference_pdfs: list[str] | None = None) -> dict:
