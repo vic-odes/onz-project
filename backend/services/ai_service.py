@@ -16,18 +16,21 @@ _MAX_EXTRACTED_CHARS = 3000
 def _compute_max_tokens(supports_native_pdf: bool) -> int:
     """Retourne le plafond de tokens à passer au modèle.
 
-    Le JSON complet d'un projet dépasse régulièrement 4 000 tokens —
-    4096 (ancienne valeur par défaut) provoque des troncatures systématiques.
-    On utilise 8000 comme base pour tous les modèles ; la variable
-    `LLM_MAX_TOKENS` permet de surcharger vers le haut ou vers le bas selon
-    les contraintes de la licence / du plan.
+    Défaut : 16000. Justification :
+    - Le JSON complet d'un projet pèse 4-8k tokens de sortie utile.
+    - Les modèles à raisonnement (GPT-5, o1, o3…) consomment en plus 2-6k
+      tokens de raisonnement *invisibles* imputés sur la même limite.
+    - Marge de sécurité pour les projets longs (résumé exécutif + note
+      conceptuelle activés, plusieurs PDFs de référence).
+
+    `LLM_MAX_TOKENS` (env) reste prioritaire pour ajuster vers le bas si
+    le plan/la licence du modèle est plus restrictif (Mistral Small 4096,
+    GPT-3.5 Turbo, etc.).
     """
     env_val = os.getenv("LLM_MAX_TOKENS")
     if env_val:
         return int(env_val)
-    # Claude supporte de grandes sorties nativement ; 8000 convient aussi aux
-    # modèles tiers bien configurés (GPT-4o, Gemini Pro, Mistral Large…).
-    return 8000
+    return 16000
 
 
 # Les prompts vivent dans backend/prompts/*.md (chargement paresseux + cache).
