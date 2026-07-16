@@ -12,6 +12,10 @@ litellm.drop_params = True
 
 logger = logging.getLogger(__name__)
 MODEL = os.getenv("LLM_MODEL", "claude-sonnet-4-20250514")
+# Plafond de jetons de sortie par requête. Le document complet (cadre logique,
+# budget, note conceptuelle, résumé exécutif…) dépasse facilement 8 000 jetons ;
+# une valeur trop basse tronque la réponse en plein JSON.
+MAX_OUTPUT_TOKENS = int(os.getenv("LLM_MAX_TOKENS", "16000"))
 
 SYSTEM_PROMPT = """
 Tu es un expert senior en montage de projets de développement international,
@@ -120,19 +124,31 @@ async def _call_llm(messages: list, extra: dict) -> str:
         response = await litellm.acompletion(
             model=MODEL,
             messages=messages,
-            max_tokens=8000,
+            max_tokens=MAX_OUTPUT_TOKENS,
             temperature=0.3,
+            # Mode JSON natif (OpenAI/Azure) — fiabilise la sortie ; supprimé
+            # automatiquement par litellm.drop_params pour les modèles qui ne
+            # le supportent pas.
+            response_format={"type": "json_object"},
             **extra,
         )
     except Exception:
         logger.exception("Erreur lors de l'appel LiteLLM (modèle=%s)", MODEL)
         raise
+    finish_reason = response.choices[0].finish_reason
     content = response.choices[0].message.content
     logger.debug("Réponse LLM reçue — finish_reason=%s content_len=%s",
-                 response.choices[0].finish_reason,
+                 finish_reason,
                  len(content) if content else "None")
+    if finish_reason == "length":
+        logger.error("Réponse tronquée — plafond de %d jetons de sortie atteint", MAX_OUTPUT_TOKENS)
+        raise ValueError(
+            f"La réponse du modèle a été tronquée (plafond de {MAX_OUTPUT_TOKENS} jetons atteint). "
+            "Augmentez LLM_MAX_TOKENS ou désactivez certaines options "
+            "(note conceptuelle, résumé exécutif) pour réduire la longueur du document."
+        )
     if not content:
-        logger.error("Le modèle a retourné un contenu vide (finish_reason=%s)", response.choices[0].finish_reason)
+        logger.error("Le modèle a retourné un contenu vide (finish_reason=%s)", finish_reason)
         raise ValueError("Le modèle a retourné une réponse vide.")
     raw = content.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
     if not raw:
