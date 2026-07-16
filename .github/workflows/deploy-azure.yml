@@ -1,0 +1,161 @@
+name: Déploiement Azure Container Apps
+
+# Déclenchement manuel + sur push de la branche principale.
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+# Variables de dépôt (Settings > Variables) — ajustables sans toucher au code :
+#   AZURE_RESOURCE_GROUP  ex. rg-onz-projet
+#   AZURE_LOCATION        ex. westeurope
+#   NAME_PREFIX           ex. onz
+#   LLM_MODEL             ex. claude-sonnet-4-20250514
+#   LLM_API_KEY_ENV_VAR   ex. ANTHROPIC_API_KEY
+#   AZURE_API_BASE        (optionnel, fournisseur Azure OpenAI)
+#   AZURE_API_VERSION     (optionnel, fournisseur Azure OpenAI)
+#
+# Secrets de dépôt (Settings > Secrets) :
+#   AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID  (fédération OIDC)
+#   LLM_API_KEY                                              (clé du modèle LLM)
+
+permissions:
+  id-token: write        # requis pour l'authentification OIDC vers Azure
+  contents: read
+
+env:
+  RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
+  LOCATION: ${{ vars.AZURE_LOCATION }}
+  NAME_PREFIX: ${{ vars.NAME_PREFIX }}
+  LLM_MODEL: ${{ vars.LLM_MODEL }}
+  LLM_API_KEY_ENV_VAR: ${{ vars.LLM_API_KEY_ENV_VAR }}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Connexion Azure (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Groupe de ressources
+        run: |
+          az group create \
+            --name "$RESOURCE_GROUP" \
+            --location "$LOCATION" \
+            --tags application=onz-projet managedBy=github-actions
+
+      # ---------------------------------------------------------------------
+      # Phase 1 — Plateforme (ACR, environnement, stockage, Key Vault, identité)
+      # ---------------------------------------------------------------------
+      - name: Déploiement de la plateforme
+        id: platform
+        run: |
+          outputs=$(az deployment group create \
+            --resource-group "$RESOURCE_GROUP" \
+            --name "onz-platform-${GITHUB_SHA::7}" \
+            --template-file infra/platform.bicep \
+            --parameters namePrefix="$NAME_PREFIX" location="$LOCATION" \
+            --query properties.outputs -o json)
+
+          echo "acr_login_server=$(echo "$outputs" | jq -r '.acrLoginServer.value')"        >> "$GITHUB_OUTPUT"
+          echo "acr_name=$(echo "$outputs" | jq -r '.acrName.value')"                         >> "$GITHUB_OUTPUT"
+          echo "environment_id=$(echo "$outputs" | jq -r '.environmentId.value')"             >> "$GITHUB_OUTPUT"
+          echo "default_domain=$(echo "$outputs" | jq -r '.environmentDefaultDomain.value')"  >> "$GITHUB_OUTPUT"
+          echo "key_vault_name=$(echo "$outputs" | jq -r '.keyVaultName.value')"              >> "$GITHUB_OUTPUT"
+          echo "env_storage_name=$(echo "$outputs" | jq -r '.envStorageName.value')"          >> "$GITHUB_OUTPUT"
+          echo "managed_identity_id=$(echo "$outputs" | jq -r '.managedIdentityId.value')"    >> "$GITHUB_OUTPUT"
+
+      - name: Enregistrement de la clé LLM dans Key Vault
+        run: |
+          az keyvault secret set \
+            --vault-name "${{ steps.platform.outputs.key_vault_name }}" \
+            --name llm-api-key \
+            --value "${{ secrets.LLM_API_KEY }}" \
+            --output none
+
+      # ---------------------------------------------------------------------
+      # Calcul des URLs publiques déterministes
+      # ---------------------------------------------------------------------
+      - name: Calcul des URLs
+        id: urls
+        run: |
+          domain="${{ steps.platform.outputs.default_domain }}"
+          echo "backend_url=https://${NAME_PREFIX}-backend.${domain}"   >> "$GITHUB_OUTPUT"
+          echo "frontend_url=https://${NAME_PREFIX}-frontend.${domain}" >> "$GITHUB_OUTPUT"
+
+      # ---------------------------------------------------------------------
+      # Phase 2 — Build & push des images
+      # ---------------------------------------------------------------------
+      - name: Connexion à l'ACR
+        run: az acr login --name "${{ steps.platform.outputs.acr_name }}"
+
+      - name: Build & push backend
+        run: |
+          IMAGE="${{ steps.platform.outputs.acr_login_server }}/onz-backend:${GITHUB_SHA::7}"
+          docker build -t "$IMAGE" ./backend
+          docker push "$IMAGE"
+          echo "BACKEND_IMAGE=$IMAGE" >> "$GITHUB_ENV"
+
+      - name: Build & push frontend
+        run: |
+          IMAGE="${{ steps.platform.outputs.acr_login_server }}/onz-frontend:${GITHUB_SHA::7}"
+          docker build \
+            --build-arg NEXT_PUBLIC_API_URL="${{ steps.urls.outputs.backend_url }}" \
+            -t "$IMAGE" ./frontend
+          docker push "$IMAGE"
+          echo "FRONTEND_IMAGE=$IMAGE" >> "$GITHUB_ENV"
+
+      # ---------------------------------------------------------------------
+      # Phase 3 — Déploiement des Container Apps
+      # ---------------------------------------------------------------------
+      - name: Déploiement des Container Apps
+        id: apps
+        run: |
+          extra=""
+          if [ -n "${{ vars.AZURE_API_BASE }}" ]; then
+            extra="azureApiBase=${{ vars.AZURE_API_BASE }} azureApiVersion=${{ vars.AZURE_API_VERSION }}"
+          fi
+
+          outputs=$(az deployment group create \
+            --resource-group "$RESOURCE_GROUP" \
+            --name "onz-apps-${GITHUB_SHA::7}" \
+            --template-file infra/apps.bicep \
+            --parameters \
+              namePrefix="$NAME_PREFIX" \
+              location="$LOCATION" \
+              environmentId="${{ steps.platform.outputs.environment_id }}" \
+              acrLoginServer="${{ steps.platform.outputs.acr_login_server }}" \
+              managedIdentityId="${{ steps.platform.outputs.managed_identity_id }}" \
+              envStorageName="${{ steps.platform.outputs.env_storage_name }}" \
+              keyVaultName="${{ steps.platform.outputs.key_vault_name }}" \
+              backendImage="$BACKEND_IMAGE" \
+              frontendImage="$FRONTEND_IMAGE" \
+              backendUrl="${{ steps.urls.outputs.backend_url }}" \
+              frontendUrl="${{ steps.urls.outputs.frontend_url }}" \
+              llmModel="$LLM_MODEL" \
+              llmApiKeyEnvVar="$LLM_API_KEY_ENV_VAR" \
+              $extra \
+            --query properties.outputs -o json)
+
+          echo "frontend_url=$(echo "$outputs" | jq -r '.frontendUrlOut.value')" >> "$GITHUB_OUTPUT"
+          echo "backend_url=$(echo "$outputs" | jq -r '.backendUrlOut.value')"   >> "$GITHUB_OUTPUT"
+
+      - name: Récapitulatif
+        run: |
+          {
+            echo "## Déploiement terminé :rocket:"
+            echo ""
+            echo "| Service  | URL |"
+            echo "|----------|-----|"
+            echo "| Frontend | ${{ steps.apps.outputs.frontend_url }} |"
+            echo "| Backend  | ${{ steps.apps.outputs.backend_url }} |"
+            echo "| API docs | ${{ steps.apps.outputs.backend_url }}/docs |"
+          } >> "$GITHUB_STEP_SUMMARY"
