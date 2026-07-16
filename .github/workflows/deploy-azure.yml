@@ -31,6 +31,8 @@ env:
   LLM_MODEL: ${{ vars.LLM_MODEL }}
   LLM_API_KEY_ENV_VAR: ${{ vars.LLM_API_KEY_ENV_VAR }}
   LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+  AZURE_API_BASE: ${{ vars.AZURE_API_BASE }}
+  AZURE_API_VERSION: ${{ vars.AZURE_API_VERSION }}
 
 jobs:
   deploy:
@@ -38,6 +40,19 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Normaliser les variables (supprimer les espaces parasites)
+        run: |
+          trim() { local s="$1"; s="${s#"${s%%[![:space:]]*}"}"; s="${s%"${s##*[![:space:]]}"}"; printf '%s' "$s"; }
+          {
+            echo "RESOURCE_GROUP=$(trim "$RESOURCE_GROUP")"
+            echo "LOCATION=$(trim "$LOCATION")"
+            echo "NAME_PREFIX=$(trim "$NAME_PREFIX")"
+            echo "LLM_MODEL=$(trim "$LLM_MODEL")"
+            echo "LLM_API_KEY_ENV_VAR=$(trim "$LLM_API_KEY_ENV_VAR")"
+            echo "AZURE_API_BASE=$(trim "$AZURE_API_BASE")"
+            echo "AZURE_API_VERSION=$(trim "$AZURE_API_VERSION")"
+          } >> "$GITHUB_ENV"
 
       - name: Connexion Azure (OIDC)
         uses: azure/login@v2
@@ -116,8 +131,8 @@ jobs:
         id: apps
         run: |
           extra=""
-          if [ -n "${{ vars.AZURE_API_BASE }}" ]; then
-            extra="azureApiBase=${{ vars.AZURE_API_BASE }} azureApiVersion=${{ vars.AZURE_API_VERSION }}"
+          if [ -n "$AZURE_API_BASE" ]; then
+            extra="azureApiBase=$AZURE_API_BASE azureApiVersion=$AZURE_API_VERSION"
           fi
 
           outputs=$(az deployment group create \
