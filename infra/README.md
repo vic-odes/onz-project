@@ -106,7 +106,7 @@ az ad app federated-credential create --id <appId> --parameters '{
 | Variable | Exemple |
 |----------|---------|
 | `AZURE_RESOURCE_GROUP` | `rg-onz-projet` |
-| `AZURE_LOCATION` | `westeurope` |
+| `AZURE_LOCATION` | `francecentral` |
 | `NAME_PREFIX` | `onz` |
 | `LLM_MODEL` | `claude-sonnet-4-20250514` |
 | `LLM_API_KEY_ENV_VAR` | `ANTHROPIC_API_KEY` |
@@ -124,7 +124,7 @@ Poussez sur `main` ou lancez le workflow manuellement (`Actions > Déploiement A
 ```bash
 az login
 RG=rg-onz-projet
-LOCATION=westeurope
+LOCATION=francecentral
 PREFIX=onz
 
 az group create -n $RG -l $LOCATION
