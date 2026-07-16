@@ -31,9 +31,6 @@ param acrLoginServer string
 @description('Resource ID de l\'identité managée (pull ACR + secrets KV).')
 param managedIdentityId string
 
-@description('Nom du lien de stockage Azure Files déclaré dans l\'environnement.')
-param envStorageName string = 'onzdata'
-
 @description('Nom du Key Vault contenant le secret llm-api-key.')
 param keyVaultName string
 
@@ -203,13 +200,18 @@ resource backend 'Microsoft.App/containerApps@2024-03-01' = {
       ]
       volumes: [
         {
+          // Stockage éphémère local (non-SMB) : évite l'erreur SQLite
+          // « database is locked » d'Azure Files. La base est réinitialisée
+          // à chaque redémarrage/redéploiement du réplica (pas de persistance).
+          // Pour une base persistante et multi-réplicas, voir la bascule
+          // PostgreSQL dans infra/README.md.
           name: 'data'
-          storageType: 'AzureFile'
-          storageName: envStorageName
+          storageType: 'EmptyDir'
         }
       ]
       scale: {
-        // SQLite + Azure Files : un seul writer autorisé.
+        // SQLite local à chaque réplica : rester à 1 réplica pour éviter des
+        // bases divergentes entre instances.
         minReplicas: 1
         maxReplicas: 1
       }

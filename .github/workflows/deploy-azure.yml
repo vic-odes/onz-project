@@ -145,7 +145,6 @@ jobs:
               environmentId="${{ steps.platform.outputs.environment_id }}" \
               acrLoginServer="${{ steps.platform.outputs.acr_login_server }}" \
               managedIdentityId="${{ steps.platform.outputs.managed_identity_id }}" \
-              envStorageName="${{ steps.platform.outputs.env_storage_name }}" \
               keyVaultName="${{ steps.platform.outputs.key_vault_name }}" \
               backendImage="$BACKEND_IMAGE" \
               frontendImage="$FRONTEND_IMAGE" \
