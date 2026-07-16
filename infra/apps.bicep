@@ -68,6 +68,9 @@ param azureApiBase string = ''
 @description('Version d\'API Azure OpenAI (uniquement pour le fournisseur Azure). Vide sinon.')
 param azureApiVersion string = '2024-02-01'
 
+@description('Plafond de jetons de sortie par requête LLM. Le document complet dépasse facilement 8000 jetons.')
+param llmMaxTokens string = '16000'
+
 // --- Ressources allouées ----------------------------------------------------
 param backendCpu string = '0.5'
 param backendMemory string = '1.0Gi'
@@ -101,6 +104,10 @@ var backendBaseEnv = [
   {
     name: 'LLM_MODEL'
     value: llmModel
+  }
+  {
+    name: 'LLM_MAX_TOKENS'
+    value: llmMaxTokens
   }
   {
     name: 'CORS_ORIGINS'
