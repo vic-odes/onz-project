@@ -129,10 +129,12 @@ PREFIX=onz
 
 az group create -n $RG -l $LOCATION
 
-# 1. Plateforme
+# 1. Plateforme (la clé LLM est injectée dans Key Vault via ARM — pas besoin
+#    de rôle data-plane sur le coffre)
 az deployment group create -g $RG \
   --template-file infra/platform.bicep \
-  --parameters infra/platform.parameters.json
+  --parameters infra/platform.parameters.json \
+    llmApiKey="<VOTRE_CLE>"
 
 # Récupérer les sorties
 DEPLOY=$(az deployment group show -g $RG -n platform --query properties.outputs -o json)
@@ -143,14 +145,11 @@ DOMAIN=$(echo $DEPLOY | jq -r '.environmentDefaultDomain.value')
 KV=$(echo $DEPLOY | jq -r '.keyVaultName.value')
 IDENTITY=$(echo $DEPLOY | jq -r '.managedIdentityId.value')
 
-# 2. Clé LLM dans Key Vault
-az keyvault secret set --vault-name $KV --name llm-api-key --value "<VOTRE_CLE>"
-
-# 3. URLs déterministes
+# 2. URLs déterministes
 BACKEND_URL="https://${PREFIX}-backend.${DOMAIN}"
 FRONTEND_URL="https://${PREFIX}-frontend.${DOMAIN}"
 
-# 4. Build & push
+# 3. Build & push
 az acr login --name $ACR_NAME
 docker build -t $ACR/onz-backend:latest ./backend
 docker push $ACR/onz-backend:latest
@@ -158,7 +157,7 @@ docker build --build-arg NEXT_PUBLIC_API_URL=$BACKEND_URL \
   -t $ACR/onz-frontend:latest ./frontend
 docker push $ACR/onz-frontend:latest
 
-# 5. Container Apps
+# 4. Container Apps
 az deployment group create -g $RG \
   --template-file infra/apps.bicep \
   --parameters \

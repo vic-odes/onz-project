@@ -29,6 +29,10 @@ param tags object = {
   managedBy: 'bicep'
 }
 
+@description('Valeur de la clé d\'API du modèle LLM. Injectée dans Key Vault via ARM (plan de gestion), ce qui évite d\'avoir besoin d\'un rôle data-plane (Secrets Officer) sur le coffre. Laisser vide pour ne pas créer/écraser le secret.')
+@secure()
+param llmApiKey string = ''
+
 // -----------------------------------------------------------------------------
 // Noms de ressources (les ressources globalement uniques utilisent uniqueString)
 // -----------------------------------------------------------------------------
@@ -157,6 +161,14 @@ resource keyVault 'Microsoft.KeyVault/vaults@2023-07-01' = {
     enableSoftDelete: true
     softDeleteRetentionInDays: 7
     publicNetworkAccess: 'Enabled'
+  }
+}
+
+resource llmSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = if (!empty(llmApiKey)) {
+  parent: keyVault
+  name: 'llm-api-key'
+  properties: {
+    value: llmApiKey
   }
 }
 
