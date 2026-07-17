@@ -19,6 +19,9 @@ on:
 # Secrets de dépôt (Settings > Secrets) :
 #   AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID  (fédération OIDC)
 #   LLM_API_KEY                                              (clé du modèle LLM)
+#   JWT_SECRET_KEY   secret de signature des JWT — DOIT rester stable entre
+#                    déploiements (le changer déconnecte tout le monde).
+#                    Générer : python -c "import secrets; print(secrets.token_urlsafe(64))"
 
 permissions:
   id-token: write        # requis pour l'authentification OIDC vers Azure
@@ -31,6 +34,7 @@ env:
   LLM_MODEL: ${{ vars.LLM_MODEL }}
   LLM_API_KEY_ENV_VAR: ${{ vars.LLM_API_KEY_ENV_VAR }}
   LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+  JWT_SECRET_KEY: ${{ secrets.JWT_SECRET_KEY }}
   AZURE_API_BASE: ${{ vars.AZURE_API_BASE }}
   AZURE_API_VERSION: ${{ vars.AZURE_API_VERSION }}
 
@@ -78,7 +82,7 @@ jobs:
             --resource-group "$RESOURCE_GROUP" \
             --name "onz-platform-${GITHUB_SHA::7}" \
             --template-file infra/platform.bicep \
-            --parameters namePrefix="$NAME_PREFIX" location="$LOCATION" llmApiKey="$LLM_API_KEY" \
+            --parameters namePrefix="$NAME_PREFIX" location="$LOCATION" llmApiKey="$LLM_API_KEY" jwtSecretKey="$JWT_SECRET_KEY" \
             --query properties.outputs -o json)
 
           echo "acr_login_server=$(echo "$outputs" | jq -r '.acrLoginServer.value')"        >> "$GITHUB_OUTPUT"

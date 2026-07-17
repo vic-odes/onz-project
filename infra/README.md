@@ -100,6 +100,7 @@ az ad app federated-credential create --id <appId> --parameters '{
 | `AZURE_TENANT_ID` | ID du tenant Azure AD |
 | `AZURE_SUBSCRIPTION_ID` | ID de la souscription |
 | `LLM_API_KEY` | Clé d'API du modèle (Anthropic, OpenAI, …) |
+| `JWT_SECRET_KEY` | Secret de signature des JWT. **Stable** entre déploiements (le changer déconnecte tout le monde). Générer : `python -c "import secrets; print(secrets.token_urlsafe(64))"` |
 
 **Variables** (`… > Variables`) :
 
@@ -134,7 +135,8 @@ az group create -n $RG -l $LOCATION
 az deployment group create -g $RG \
   --template-file infra/platform.bicep \
   --parameters infra/platform.parameters.json \
-    llmApiKey="<VOTRE_CLE>"
+    llmApiKey="<VOTRE_CLE>" \
+    jwtSecretKey="$(python -c 'import secrets; print(secrets.token_urlsafe(64))')"
 
 # Récupérer les sorties
 DEPLOY=$(az deployment group show -g $RG -n platform --query properties.outputs -o json)
