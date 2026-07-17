@@ -1,25 +1,69 @@
 import logging
-from fastapi import APIRouter, Depends, HTTPException, status
+import os
+
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from database import get_db
 from dependencies import get_current_user
 from models.user import User
-from schemas.user import UserCreate, UserLogin, UserResponse, Token
+from rate_limit import limiter, LOGIN_RATE_LIMIT, REGISTER_RATE_LIMIT
+from schemas.user import UserCreate, UserLogin, UserResponse, SessionResponse
 from services.auth_service import (
     hash_password,
     verify_password,
     create_access_token,
     PasswordTooLongError,
+    COOKIE_NAME,
 )
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-@router.post("/register", response_model=Token, status_code=status.HTTP_201_CREATED)
-def register(payload: UserCreate, db: Session = Depends(get_db)):
+def _cookie_flags() -> tuple[bool, str]:
+    """(secure, samesite) — configurables selon l'environnement de déploiement.
+
+    - `AUTH_COOKIE_SECURE` (défaut true) : n'envoie le cookie qu'en HTTPS. Les
+      navigateurs modernes acceptent malgré tout les cookies Secure sur
+      http://localhost, donc le défaut sécurisé n'entrave pas le dev local.
+    - `AUTH_COOKIE_SAMESITE` (défaut "lax") : "lax" bloque l'envoi du cookie sur
+      les requêtes POST cross-site → protection CSRF. Passer à "none" (avec
+      secure=true) si le front et l'API sont sur des domaines réellement distincts.
+    """
+    secure = os.getenv("AUTH_COOKIE_SECURE", "true").lower() != "false"
+    samesite = os.getenv("AUTH_COOKIE_SAMESITE", "lax").lower()
+    return secure, samesite
+
+
+def _set_auth_cookie(response: Response, token: str, max_age: int) -> None:
+    secure, samesite = _cookie_flags()
+    response.set_cookie(
+        key=COOKIE_NAME,
+        value=token,
+        max_age=max_age,
+        httponly=True,      # inaccessible au JavaScript → immunité au vol par XSS
+        secure=secure,
+        samesite=samesite,
+        path="/",
+    )
+
+
+def _clear_auth_cookie(response: Response) -> None:
+    secure, samesite = _cookie_flags()
+    response.delete_cookie(
+        key=COOKIE_NAME,
+        httponly=True,
+        secure=secure,
+        samesite=samesite,
+        path="/",
+    )
+
+
+@router.post("/register", response_model=SessionResponse, status_code=status.HTTP_201_CREATED)
+@limiter.limit(REGISTER_RATE_LIMIT)
+def register(request: Request, response: Response, payload: UserCreate, db: Session = Depends(get_db)):
     email_norm = payload.email.lower().strip()
     existing = db.query(User).filter(User.email == email_norm).first()
     if existing:
@@ -45,15 +89,13 @@ def register(payload: UserCreate, db: Session = Depends(get_db)):
     logger.info("Nouvel utilisateur enregistré — id=%d email=%s", user.id, user.email)
 
     token, expires_in = create_access_token(user_id=user.id, email=user.email)
-    return Token(
-        access_token=token,
-        expires_in=expires_in,
-        user=UserResponse.model_validate(user),
-    )
+    _set_auth_cookie(response, token, expires_in)
+    return SessionResponse(expires_in=expires_in, user=UserResponse.model_validate(user))
 
 
-@router.post("/login", response_model=Token)
-def login(payload: UserLogin, db: Session = Depends(get_db)):
+@router.post("/login", response_model=SessionResponse)
+@limiter.limit(LOGIN_RATE_LIMIT)
+def login(request: Request, response: Response, payload: UserLogin, db: Session = Depends(get_db)):
     email_norm = payload.email.lower().strip()
     user = db.query(User).filter(User.email == email_norm).first()
     if not user or not verify_password(payload.password, user.hashed_password):
@@ -63,12 +105,16 @@ def login(payload: UserLogin, db: Session = Depends(get_db)):
         raise HTTPException(status_code=403, detail="Compte désactivé.")
 
     token, expires_in = create_access_token(user_id=user.id, email=user.email)
+    _set_auth_cookie(response, token, expires_in)
     logger.info("Connexion réussie — id=%d email=%s", user.id, user.email)
-    return Token(
-        access_token=token,
-        expires_in=expires_in,
-        user=UserResponse.model_validate(user),
-    )
+    return SessionResponse(expires_in=expires_in, user=UserResponse.model_validate(user))
+
+
+@router.post("/logout", status_code=status.HTTP_200_OK)
+def logout(response: Response):
+    """Invalide la session côté client en supprimant le cookie httpOnly."""
+    _clear_auth_cookie(response)
+    return {"detail": "Déconnecté."}
 
 
 @router.get("/me", response_model=UserResponse)

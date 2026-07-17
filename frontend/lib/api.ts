@@ -1,4 +1,4 @@
-import { AuthUser, clearStoredAuth, getStoredToken } from "./auth";
+import { AuthUser, clearStoredUser } from "./auth";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
@@ -39,9 +39,7 @@ export interface ProjectSummary {
   docx_path: string | null;
 }
 
-export interface TokenResponse {
-  access_token: string;
-  token_type: string;
+export interface SessionResponse {
   expires_in: number;
   user: AuthUser;
 }
@@ -62,21 +60,27 @@ export class UnauthorizedError extends ApiError {
 }
 
 interface RequestOptions extends RequestInit {
-  /** Si false, n'envoie pas le bearer même s'il existe (utile pour /login, /register). */
+  /** Si false, un 401 est renvoyé tel quel au lieu de déclencher la déconnexion
+   *  globale (utile pour /login et /register où 401 = mauvais identifiants). */
   withAuth?: boolean;
 }
 
 async function apiFetch(path: string, options: RequestOptions = {}): Promise<Response> {
   const { withAuth = true, headers, ...rest } = options;
   const finalHeaders = new Headers(headers);
-  if (withAuth) {
-    const token = getStoredToken();
-    if (token) finalHeaders.set("Authorization", `Bearer ${token}`);
-  }
-  const response = await fetch(`${API_BASE}${path}`, { ...rest, headers: finalHeaders });
+  // `credentials: "include"` fait envoyer/recevoir le cookie httpOnly de session.
+  const response = await fetch(`${API_BASE}${path}`, {
+    ...rest,
+    headers: finalHeaders,
+    credentials: "include",
+  });
   if (response.status === 401 && withAuth) {
-    // Token invalide ou expiré : on purge le storage. La redirection vers /login est gérée par le AuthContext.
-    clearStoredAuth();
+    // Session expirée/invalide : on purge le cache user et on notifie l'app
+    // (le AuthContext écoute cet événement pour rediriger vers /login).
+    clearStoredUser();
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(new Event("onz:unauthorized"));
+    }
     throw new UnauthorizedError();
   }
   return response;
@@ -95,7 +99,7 @@ async function readErrorMessage(response: Response, fallback: string): Promise<s
 // Auth
 // ─────────────────────────────────────────────────────────────────────────
 
-export async function login(email: string, password: string): Promise<TokenResponse> {
+export async function login(email: string, password: string): Promise<SessionResponse> {
   const response = await apiFetch("/api/auth/login", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -112,7 +116,7 @@ export async function register(
   email: string,
   password: string,
   full_name?: string,
-): Promise<TokenResponse> {
+): Promise<SessionResponse> {
   const response = await apiFetch("/api/auth/register", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -131,6 +135,15 @@ export async function fetchMe(): Promise<AuthUser> {
     throw new ApiError(await readErrorMessage(response, "Profil indisponible."), response.status);
   }
   return response.json();
+}
+
+export async function logout(): Promise<void> {
+  // Demande au backend de supprimer le cookie httpOnly de session.
+  try {
+    await apiFetch("/api/auth/logout", { method: "POST", withAuth: false });
+  } catch {
+    // Même si l'appel échoue (réseau), on poursuit la déconnexion côté client.
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────

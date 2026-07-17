@@ -25,8 +25,8 @@ class UserResponse(BaseModel):
         from_attributes = True
 
 
-class Token(BaseModel):
-    access_token: str
-    token_type: str = "bearer"
+class SessionResponse(BaseModel):
+    """Réponse d'authentification. Le JWT est posé dans un cookie httpOnly côté
+    serveur — il n'apparaît JAMAIS dans le corps de la réponse (protection XSS)."""
     expires_in: int  # secondes
     user: UserResponse

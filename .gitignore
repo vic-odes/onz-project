@@ -26,3 +26,6 @@ Thumbs.db
 
 # TypeScript incremental build cache
 *.tsbuildinfo
+
+# Réglages Claude Code locaux (par développeur, ne pas committer)
+.claude/settings.local.json

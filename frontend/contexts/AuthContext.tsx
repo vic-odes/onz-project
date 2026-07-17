@@ -2,14 +2,14 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import {
   AuthUser,
-  clearStoredAuth,
-  getStoredToken,
+  clearStoredUser,
   getStoredUser,
-  setStoredAuth,
+  setStoredUser,
 } from "@/lib/auth";
 import {
   fetchMe,
   login as apiLogin,
+  logout as apiLogout,
   register as apiRegister,
   UnauthorizedError,
 } from "@/lib/api";
@@ -28,47 +28,55 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [loading, setLoading] = useState(true);
 
-  // Au montage : si un token + user existent en localStorage, les rétablir et
-  // valider le token via /me en arrière-plan. Si invalide, on déconnecte.
+  // Au montage : afficher le user en cache (optimiste) puis valider la session
+  // via /me — le cookie httpOnly est envoyé automatiquement. En cas de 401, on
+  // déconnecte ; sur une simple erreur réseau, on garde le cache.
   useEffect(() => {
-    const token = getStoredToken();
     const stored = getStoredUser();
-    if (!token || !stored) {
-      setLoading(false);
-      return;
-    }
-    setUser(stored);
+    if (stored) setUser(stored);
     fetchMe()
       .then((fresh) => {
         setUser(fresh);
-        // rafraîchit les infos user en localStorage sans toucher au token
-        setStoredAuth(token, fresh);
+        setStoredUser(fresh);
       })
       .catch((err) => {
         if (err instanceof UnauthorizedError) {
-          // token expiré/invalide — déjà purgé par apiFetch
           setUser(null);
+          clearStoredUser();
         }
         // autre erreur réseau : on garde le user en cache (mode optimiste)
       })
       .finally(() => setLoading(false));
   }, []);
 
+  // Un 401 survenu sur n'importe quelle requête (session expirée en cours d'usage)
+  // émet "onz:unauthorized" → on réinitialise l'état pour que l'AuthGuard redirige.
+  useEffect(() => {
+    const onUnauthorized = () => {
+      setUser(null);
+      clearStoredUser();
+    };
+    window.addEventListener("onz:unauthorized", onUnauthorized);
+    return () => window.removeEventListener("onz:unauthorized", onUnauthorized);
+  }, []);
+
   const login = useCallback(async (email: string, password: string) => {
     const res = await apiLogin(email, password);
-    setStoredAuth(res.access_token, res.user);
+    setStoredUser(res.user);
     setUser(res.user);
   }, []);
 
   const register = useCallback(async (email: string, password: string, fullName?: string) => {
     const res = await apiRegister(email, password, fullName);
-    setStoredAuth(res.access_token, res.user);
+    setStoredUser(res.user);
     setUser(res.user);
   }, []);
 
   const logout = useCallback(() => {
-    clearStoredAuth();
+    // Réinitialisation immédiate de l'UI, puis suppression du cookie côté serveur.
+    clearStoredUser();
     setUser(null);
+    void apiLogout();
   }, []);
 
   const value = useMemo<AuthContextValue>(

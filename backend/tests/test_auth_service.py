@@ -59,8 +59,13 @@ def test_token_expired_rejected():
 
 def test_token_tampered_rejected():
     token, _ = create_access_token(user_id=1, email="x@y.fr")
-    # Inverser le dernier caractère du payload pour casser la signature
-    tampered = token[:-1] + ("A" if token[-1] != "A" else "B")
+    # Altérer le segment payload (header.payload.signature) : la signature HS256
+    # couvre header+payload, donc toute modification du payload l'invalide de
+    # façon déterministe (contrairement à un flip du dernier char de signature,
+    # dont peu de bits sont significatifs en base64url).
+    header, payload, signature = token.split(".")
+    tampered_payload = ("A" if payload[0] != "A" else "B") + payload[1:]
+    tampered = f"{header}.{tampered_payload}.{signature}"
     with pytest.raises(JWTError):
         decode_token(tampered)
 

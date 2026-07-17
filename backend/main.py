@@ -3,9 +3,12 @@ import logging
 import time
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from slowapi.errors import RateLimitExceeded
+from slowapi import _rate_limit_exceeded_handler
 from routers import generate, projects, documents, auth
 from database import init_db
 from middleware import BodySizeLimitMiddleware
+from rate_limit import limiter
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -28,6 +31,10 @@ app = FastAPI(
     description="API de génération de documents de projets de développement international",
     version="1.0.0",
 )
+
+# Limitation de débit (brute-force /login, spam /register) — voir rate_limit.py
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 _cors_raw = os.getenv("CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000")
 _cors_origins = [o.strip() for o in _cors_raw.split(",") if o.strip()]

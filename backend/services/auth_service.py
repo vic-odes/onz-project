@@ -15,6 +15,9 @@ _BCRYPT_MAX_BYTES = 72
 _JWT_ALGORITHM = "HS256"
 _DEFAULT_EXPIRE_MINUTES = 60 * 24  # 24h
 
+# Nom du cookie httpOnly qui transporte le JWT (jamais lisible par le JS du navigateur).
+COOKIE_NAME = "onz_token"
+
 
 def _get_secret() -> str:
     """Lue à chaque appel pour permettre le hot-reload en dev."""
@@ -85,4 +88,5 @@ __all__ = [
     "decode_token",
     "JWTError",
     "PasswordTooLongError",
+    "COOKIE_NAME",
 ]

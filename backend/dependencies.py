@@ -1,20 +1,30 @@
 import logging
-from fastapi import Depends, HTTPException, status
-from fastapi.security import OAuth2PasswordBearer
+from typing import Optional
+
+from fastapi import Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
 from database import get_db
 from models.user import User
-from services.auth_service import decode_token, JWTError
+from services.auth_service import decode_token, JWTError, COOKIE_NAME
 
 logger = logging.getLogger(__name__)
 
-# tokenUrl pointe vers l'endpoint de login — sert principalement pour Swagger UI
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login", auto_error=True)
+
+def _extract_token(request: Request) -> Optional[str]:
+    """Récupère le JWT : d'abord le cookie httpOnly (front web), sinon l'en-tête
+    `Authorization: Bearer` (clients API, Swagger, tests)."""
+    cookie_token = request.cookies.get(COOKIE_NAME)
+    if cookie_token:
+        return cookie_token
+    auth_header = request.headers.get("Authorization", "")
+    if auth_header.startswith("Bearer "):
+        return auth_header[len("Bearer "):].strip() or None
+    return None
 
 
 def get_current_user(
-    token: str = Depends(oauth2_scheme),
+    request: Request,
     db: Session = Depends(get_db),
 ) -> User:
     credentials_exc = HTTPException(
@@ -22,6 +32,9 @@ def get_current_user(
         detail="Identifiants invalides ou expirés.",
         headers={"WWW-Authenticate": "Bearer"},
     )
+    token = _extract_token(request)
+    if not token:
+        raise credentials_exc
     try:
         payload = decode_token(token)
     except JWTError as e:
