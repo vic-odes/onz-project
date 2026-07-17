@@ -27,10 +27,19 @@ def _compute_max_tokens(supports_native_pdf: bool) -> int:
     le plan/la licence du modèle est plus restrictif (Mistral Small 4096,
     GPT-3.5 Turbo, etc.).
     """
+    default = 16000
     env_val = os.getenv("LLM_MAX_TOKENS")
     if env_val:
-        return int(env_val)
-    return 16000
+        try:
+            parsed = int(env_val.strip())
+        except ValueError:
+            logger.warning("LLM_MAX_TOKENS non entier (%r) — défaut %d utilisé.", env_val, default)
+            return default
+        if parsed <= 0:
+            logger.warning("LLM_MAX_TOKENS <= 0 (%r) — défaut %d utilisé.", env_val, default)
+            return default
+        return parsed
+    return default
 
 
 # Les prompts vivent dans backend/prompts/*.md (chargement paresseux + cache).

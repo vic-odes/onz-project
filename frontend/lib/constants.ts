@@ -42,6 +42,18 @@ export const SECTOR_COLORS: Record<string, string> = {
   Autre: "bg-gray-100 text-gray-700",
 };
 
+/** Couleur pleine de la barre d'accent en haut des cartes de projet, par secteur. */
+export const SECTOR_ACCENT: Record<string, string> = {
+  Santé: "bg-red-400",
+  Éducation: "bg-blue-400",
+  Agriculture: "bg-yellow-400",
+  Environnement: "bg-green-400",
+  "Eau & Assainissement": "bg-cyan-400",
+  Gouvernance: "bg-purple-400",
+  "Protection sociale": "bg-orange-400",
+  Autre: "bg-gray-400",
+};
+
 export const STEP_LABELS = [
   "Informations générales",
   "Problématique & Objectifs",

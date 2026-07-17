@@ -1,31 +1,55 @@
 "use client";
 import { ProjectSummary, deleteProject, downloadProject } from "@/lib/api";
-import { SECTOR_COLORS } from "@/lib/constants";
-import { useState } from "react";
+import { SECTOR_COLORS, SECTOR_ACCENT } from "@/lib/constants";
+import { useEffect, useRef, useState } from "react";
 
 interface ProjectCardProps {
   project: ProjectSummary;
   onDelete: (id: number) => void;
 }
 
+// Troncature à 2 lignes sans dépendre du plugin line-clamp de Tailwind.
+const clamp2: React.CSSProperties = {
+  display: "-webkit-box",
+  WebkitLineClamp: 2,
+  WebkitBoxOrient: "vertical",
+  overflow: "hidden",
+};
+
 export default function ProjectCard({ project, onDelete }: ProjectCardProps) {
   const [deleting, setDeleting] = useState(false);
   const [downloading, setDownloading] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const confirmTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => () => {
+    if (confirmTimer.current) clearTimeout(confirmTimer.current);
+  }, []);
+
+  const askDelete = () => {
+    setError(null);
+    setConfirmDelete(true);
+    // Réinitialise l'état « Confirmer ? » si l'utilisateur ne tranche pas.
+    confirmTimer.current = setTimeout(() => setConfirmDelete(false), 4000);
+  };
 
   const handleDelete = async () => {
-    if (!confirm(`Supprimer le projet "${project.nom}" ?`)) return;
+    if (confirmTimer.current) clearTimeout(confirmTimer.current);
     setDeleting(true);
     try {
       await deleteProject(project.id);
       onDelete(project.id);
     } catch {
-      alert("Impossible de supprimer ce projet.");
+      setError("Suppression impossible. Réessayez.");
+      setConfirmDelete(false);
     } finally {
       setDeleting(false);
     }
   };
 
   const handleDownload = async () => {
+    setError(null);
     setDownloading(true);
     try {
       const blob = await downloadProject(project.id);
@@ -33,10 +57,13 @@ export default function ProjectCard({ project, onDelete }: ProjectCardProps) {
       const a = document.createElement("a");
       a.href = url;
       a.download = `${project.nom.replace(/\s+/g, "_")}_ONZ.docx`;
+      document.body.appendChild(a);
       a.click();
-      URL.revokeObjectURL(url);
+      a.remove();
+      // Délai avant révocation : révoquer trop tôt annule le téléchargement sur certains navigateurs.
+      setTimeout(() => URL.revokeObjectURL(url), 1500);
     } catch {
-      alert("Document non disponible.");
+      setError("Document non disponible.");
     } finally {
       setDownloading(false);
     }
@@ -49,53 +76,117 @@ export default function ProjectCard({ project, onDelete }: ProjectCardProps) {
   });
 
   const sectorClass = SECTOR_COLORS[project.secteur] ?? "bg-gray-100 text-gray-700";
+  const accentClass = SECTOR_ACCENT[project.secteur] ?? "bg-bleu-marine";
+
+  const description = project.objectif_global || project.probleme_principal;
 
   return (
-    <div className="card hover:shadow-lg transition-shadow flex flex-col gap-4">
-      <div className="flex items-start justify-between gap-2">
-        <h3 className="font-playfair text-lg font-bold text-bleu-marine leading-tight">
-          {project.nom}
-        </h3>
-        <span
-          className={`text-xs font-semibold px-2 py-1 rounded-full whitespace-nowrap font-source ${sectorClass}`}
-        >
-          {project.secteur}
-        </span>
-      </div>
+    <article className="group relative flex flex-col overflow-hidden rounded-xl bg-white border border-gray-100 shadow-md
+                        transition-all duration-200 hover:shadow-xl hover:-translate-y-0.5">
+      {/* Barre d'accent colorée par secteur */}
+      <div className={`h-1.5 w-full ${accentClass}`} aria-hidden="true" />
 
-      <div className="grid grid-cols-2 gap-x-4 gap-y-1 font-source text-sm text-gray-600">
-        <span>🌍 {project.pays}</span>
-        <span>🏦 {project.bailleur}</span>
-        {project.duree_mois && <span>📅 {project.duree_mois} mois</span>}
-        {project.budget_total && (
-          <span>💰 ${project.budget_total.toLocaleString("fr-FR")} USD</span>
-        )}
-      </div>
-
-      <p className="font-source text-xs text-gray-400">Créé le {date}</p>
-
-      <div className="flex gap-2 mt-auto">
-        {project.docx_path && (
-          <button
-            type="button"
-            onClick={handleDownload}
-            disabled={downloading}
-            className="flex-1 border border-vert-sauge text-vert-sauge rounded-lg py-2 text-sm font-semibold
-                       hover:bg-vert-sauge hover:text-white transition-colors font-source disabled:opacity-50"
+      <div className="flex flex-1 flex-col gap-3 p-5">
+        {/* En-tête : titre + badge secteur */}
+        <div className="flex items-start justify-between gap-3">
+          <h3
+            title={project.nom}
+            style={clamp2}
+            className="font-playfair text-lg font-bold leading-snug text-bleu-marine"
           >
-            {downloading ? "..." : "⬇ Télécharger"}
-          </button>
+            {project.nom}
+          </h3>
+          <span
+            className={`shrink-0 whitespace-nowrap rounded-full px-2.5 py-1 text-xs font-semibold font-source ${sectorClass}`}
+          >
+            {project.secteur}
+          </span>
+        </div>
+
+        {/* Description : objectif global (ou problématique en repli) */}
+        {description && (
+          <p style={clamp2} className="font-source text-sm leading-relaxed text-gray-500">
+            {description}
+          </p>
         )}
-        <button
-          type="button"
-          onClick={handleDelete}
-          disabled={deleting}
-          className="flex-1 border border-red-300 text-red-500 rounded-lg py-2 text-sm font-semibold
-                     hover:bg-red-50 transition-colors font-source disabled:opacity-50"
-        >
-          {deleting ? "Suppression..." : "Supprimer"}
-        </button>
+
+        {/* Métadonnées en chips */}
+        <div className="flex flex-wrap gap-2 font-source text-xs">
+          <span className="inline-flex items-center gap-1 rounded-full border border-gray-100 bg-gray-50 px-2.5 py-1 text-gray-600">
+            🌍 {project.pays}
+          </span>
+          <span className="inline-flex items-center gap-1 rounded-full border border-gray-100 bg-gray-50 px-2.5 py-1 text-gray-600">
+            🏦 {project.bailleur}
+          </span>
+          {project.duree_mois != null && (
+            <span className="inline-flex items-center gap-1 rounded-full border border-gray-100 bg-gray-50 px-2.5 py-1 text-gray-600">
+              📅 {project.duree_mois} mois
+            </span>
+          )}
+          {project.budget_total != null && (
+            <span className="inline-flex items-center gap-1 rounded-full border border-vert-sauge/20 bg-vert-sauge/10 px-2.5 py-1 font-semibold text-vert-sauge">
+              💰 {project.budget_total.toLocaleString("fr-FR")} USD
+            </span>
+          )}
+        </div>
+
+        {error && (
+          <p role="alert" className="font-source text-xs font-semibold text-red-500">
+            {error}
+          </p>
+        )}
+
+        {/* Pied : date + actions */}
+        <div className="mt-auto flex items-center justify-between gap-2 border-t border-gray-100 pt-3">
+          <span className="font-source text-xs text-gray-400">Créé le {date}</span>
+
+          {confirmDelete ? (
+            <div className="flex items-center gap-2 font-source text-xs">
+              <span className="text-gray-500">Supprimer&nbsp;?</span>
+              <button
+                type="button"
+                onClick={handleDelete}
+                disabled={deleting}
+                className="rounded-md bg-red-500 px-2.5 py-1 font-semibold text-white transition-colors hover:bg-red-600 disabled:opacity-50"
+              >
+                {deleting ? "..." : "Oui"}
+              </button>
+              <button
+                type="button"
+                onClick={() => setConfirmDelete(false)}
+                disabled={deleting}
+                className="rounded-md border border-gray-200 px-2.5 py-1 font-semibold text-gray-500 transition-colors hover:bg-gray-50 disabled:opacity-50"
+              >
+                Non
+              </button>
+            </div>
+          ) : (
+            <div className="flex items-center gap-1.5">
+              {project.docx_path && (
+                <button
+                  type="button"
+                  onClick={handleDownload}
+                  disabled={downloading}
+                  aria-label={`Télécharger le document du projet ${project.nom}`}
+                  className="inline-flex items-center gap-1 rounded-lg border border-vert-sauge px-3 py-1.5 text-sm font-semibold text-vert-sauge
+                             transition-colors hover:bg-vert-sauge hover:text-white disabled:opacity-50 font-source"
+                >
+                  {downloading ? "..." : "⬇ Télécharger"}
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={askDelete}
+                aria-label={`Supprimer le projet ${project.nom}`}
+                className="inline-flex items-center rounded-lg border border-gray-200 px-3 py-1.5 text-sm font-semibold text-gray-400
+                           transition-colors hover:border-red-300 hover:text-red-500 disabled:opacity-50 font-source"
+              >
+                🗑
+              </button>
+            </div>
+          )}
+        </div>
       </div>
-    </div>
+    </article>
   );
 }

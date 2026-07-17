@@ -129,12 +129,32 @@ def strip_markdown_fences(content: str) -> str:
 
 
 def parse_json_response(raw: str) -> dict:
-    """Parse une réponse LLM JSON. Lève `json.JSONDecodeError` si invalide."""
+    """Parse une réponse LLM JSON.
+
+    Beaucoup de modèles produisent un JSON *presque* valide sur les longues
+    sorties (guillemet non échappé dans une valeur, virgule finale, caractère de
+    contrôle…). On tente donc une réparation automatique avant d'abandonner ;
+    ça évite un échec 502 pour une simple faute de syntaxe récupérable.
+
+    Lève `json.JSONDecodeError` uniquement si même la réparation ne donne pas
+    un objet JSON exploitable.
+    """
     try:
         return json.loads(raw)
-    except json.JSONDecodeError:
-        logger.error("JSON invalide retourné. Début du contenu brut: %r", raw[:500])
-        raise
+    except json.JSONDecodeError as exc:
+        logger.warning("JSON invalide (%s) — tentative de réparation automatique", exc)
+        try:
+            from json_repair import repair_json
+            repaired = repair_json(raw, return_objects=True)
+        except Exception:  # pragma: no cover - la lib ne devrait pas lever
+            repaired = None
+        if isinstance(repaired, dict) and repaired:
+            logger.info("JSON réparé avec succès — %d clés de premier niveau", len(repaired))
+            return repaired
+        logger.error(
+            "JSON irréparable. Début du contenu brut: %r", raw[:500]
+        )
+        raise exc
 
 
 __all__ = [

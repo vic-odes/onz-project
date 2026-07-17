@@ -11,3 +11,4 @@ pypdf>=4.0.0
 bcrypt==4.2.1
 python-jose[cryptography]==3.3.0
 slowapi==0.1.9
+json-repair>=0.30.0
