@@ -1,10 +1,11 @@
 "use client";
 import { useEffect, useState } from "react";
-import { listProjects, ProjectSummary } from "@/lib/api";
+import { listProjects, ProjectSummary, UnauthorizedError } from "@/lib/api";
 import ProjectCard from "@/components/ProjectCard";
+import AuthGuard from "@/components/AuthGuard";
 import Link from "next/link";
 
-export default function MesProjetsPage() {
+function MesProjetsContent() {
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -12,7 +13,11 @@ export default function MesProjetsPage() {
   useEffect(() => {
     listProjects()
       .then(setProjects)
-      .catch(() => setError("Impossible de charger les projets. Vérifiez que le serveur est lancé."))
+      .catch((err) => {
+        // Le 401 est déjà géré par apiFetch + AuthGuard ; on n'affiche pas d'erreur ici
+        if (err instanceof UnauthorizedError) return;
+        setError(err instanceof Error ? err.message : "Impossible de charger les projets.");
+      })
       .finally(() => setLoading(false));
   }, []);
 
@@ -51,7 +56,7 @@ export default function MesProjetsPage() {
         {!loading && !error && projects.length === 0 && (
           <div className="card text-center py-16">
             <p className="font-playfair text-xl text-bleu-marine mb-4">
-              Aucun projet pour l'instant
+              Aucun projet pour l&apos;instant
             </p>
             <p className="font-source text-gray-500 mb-6">
               Créez votre premier document de projet de développement international.
@@ -71,5 +76,13 @@ export default function MesProjetsPage() {
         )}
       </div>
     </div>
+  );
+}
+
+export default function MesProjetsPage() {
+  return (
+    <AuthGuard>
+      <MesProjetsContent />
+    </AuthGuard>
   );
 }

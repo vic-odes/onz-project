@@ -1,12 +1,14 @@
 "use client";
 import { useEffect, useState } from "react";
 
-const messages = [
-  "Analyse du contexte du projet...",
-  "Génération du cadre logique...",
-  "Construction de l'analyse des risques...",
-  "Calcul du budget et analyse coût-bénéfice...",
-  "Finalisation du document Word...",
+// Étapes affichées en boucle pendant la génération (le backend ne streame pas de
+// progression : on simule une progression douce pour rassurer l'utilisateur).
+const STEP_LABELS = [
+  "Analyse du contexte du projet…",
+  "Génération du cadre logique…",
+  "Construction de l'analyse des risques…",
+  "Calcul du budget…",
+  "Finalisation du document Word…",
 ];
 
 interface GenerationLoaderProps {
@@ -22,15 +24,24 @@ export default function GenerationLoader({
   fileName = "projet_ONZ.docx",
   error,
 }: GenerationLoaderProps) {
-  const [msgIndex, setMsgIndex] = useState(0);
-
+  const [tick, setTick] = useState(0);
   useEffect(() => {
     if (downloadBlob || error) return;
-    const interval = setInterval(() => {
-      setMsgIndex((i) => (i < messages.length - 1 ? i + 1 : i));
-    }, 2000);
+    const interval = setInterval(() => setTick((t) => t + 1), 1500);
     return () => clearInterval(interval);
   }, [downloadBlob, error]);
+
+  // URL objet créée une seule fois par blob et révoquée au démontage (évite la fuite mémoire).
+  const [blobUrl, setBlobUrl] = useState<string | null>(null);
+  useEffect(() => {
+    if (!downloadBlob) {
+      setBlobUrl(null);
+      return;
+    }
+    const url = URL.createObjectURL(downloadBlob);
+    setBlobUrl(url);
+    return () => URL.revokeObjectURL(url);
+  }, [downloadBlob]);
 
   if (error) {
     return (
@@ -39,13 +50,12 @@ export default function GenerationLoader({
           ✗
         </div>
         <p className="font-playfair text-xl font-bold text-red-600">Erreur de génération</p>
-        <p className="font-source text-gray-600 text-center max-w-md">{error}</p>
+        <p role="alert" className="font-source text-gray-600 text-center max-w-md">{error}</p>
       </div>
     );
   }
 
-  if (downloadBlob) {
-    const url = URL.createObjectURL(downloadBlob);
+  if (downloadBlob && blobUrl) {
     return (
       <div className="flex flex-col items-center justify-center py-16 gap-6">
         <div className="w-20 h-20 rounded-full bg-green-100 flex items-center justify-center text-4xl">
@@ -58,7 +68,7 @@ export default function GenerationLoader({
           Votre document Word professionnel est prêt.
         </p>
         <a
-          href={url}
+          href={blobUrl}
           download={fileName}
           onClick={onDownload}
           className="btn-primary inline-flex items-center gap-2 text-lg px-8 py-4"
@@ -70,10 +80,12 @@ export default function GenerationLoader({
     );
   }
 
+  const label = STEP_LABELS[Math.min(tick, STEP_LABELS.length - 1)];
+  const percent = ((Math.min(tick, STEP_LABELS.length - 1) + 1) / STEP_LABELS.length) * 100;
+
   return (
     <div className="flex flex-col items-center justify-center py-16 gap-8">
-      {/* Spinner */}
-      <div className="relative w-20 h-20">
+      <div className="relative w-20 h-20" role="status" aria-label="Génération en cours">
         <div className="absolute inset-0 rounded-full border-4 border-gray-200" />
         <div className="absolute inset-0 rounded-full border-4 border-t-bleu-marine border-r-transparent border-b-transparent border-l-transparent animate-spin" />
         <div className="absolute inset-2 rounded-full border-4 border-t-vert-sauge border-r-transparent border-b-transparent border-l-transparent animate-spin [animation-direction:reverse] [animation-duration:1.5s]" />
@@ -84,19 +96,24 @@ export default function GenerationLoader({
           Génération en cours
         </p>
         <p className="font-source text-vert-sauge font-semibold min-h-[1.5rem] transition-all duration-500">
-          {messages[msgIndex]}
+          {label}
         </p>
       </div>
 
-      {/* Barre de progression */}
-      <div className="w-64 bg-gray-200 rounded-full h-2">
+      <div
+        className="w-64 bg-gray-200 rounded-full h-2"
+        role="progressbar"
+        aria-valuenow={Math.round(percent)}
+        aria-valuemin={0}
+        aria-valuemax={100}
+      >
         <div
           className="bg-vert-sauge h-2 rounded-full transition-all duration-500"
-          style={{ width: `${((msgIndex + 1) / messages.length) * 100}%` }}
+          style={{ width: `${Math.round(percent)}%` }}
         />
       </div>
       <p className="font-source text-xs text-gray-400">
-        Cette opération peut prendre 30 à 60 secondes...
+        Cette opération peut prendre 30 à 60 secondes…
       </p>
     </div>
   );

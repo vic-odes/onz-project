@@ -1,36 +1,19 @@
 "use client";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { generateDocument, prefillFromPdf, ProjectFormData } from "@/lib/api";
+import { BAILLEURS, SECTEURS, STEP_LABELS } from "@/lib/constants";
 import GenerationLoader from "./GenerationLoader";
 import PdfUpload from "./PdfUpload";
 
-const SECTEURS = [
-  "Santé",
-  "Éducation",
-  "Agriculture",
-  "Environnement",
-  "Eau & Assainissement",
-  "Gouvernance",
-  "Protection sociale",
-  "Autre",
-];
+// Versionner la clé permet d'invalider proprement les anciens snapshots
+// si la forme du formulaire change entre deux releases.
+const DRAFT_STORAGE_KEY = "onz_form_draft_v1";
 
-const BAILLEURS = [
-  "AFD",
-  "Union Européenne",
-  "Banque Mondiale",
-  "PNUD",
-  "Autre",
-];
-
-const STEP_LABELS = [
-  "Informations générales",
-  "Problématique & Objectifs",
-  "Planification",
-  "Budget",
-  "Documents de référence",
-  "Confirmation",
-];
+interface FormDraft {
+  step: number;
+  form: ProjectFormData;
+  bailleurCustom: string;
+}
 
 const defaultForm: ProjectFormData = {
   nom: "",
@@ -70,6 +53,51 @@ export default function Stepper() {
   const [generating, setGenerating] = useState(false);
   const [blob, setBlob] = useState<Blob | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [draftRestored, setDraftRestored] = useState(false);
+  const draftLoaded = useRef(false);
+
+  // Restauration du brouillon au montage (avant d'autoriser l'écriture).
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      const raw = window.localStorage.getItem(DRAFT_STORAGE_KEY);
+      if (raw) {
+        const draft = JSON.parse(raw) as FormDraft;
+        if (draft?.form && typeof draft.form === "object") {
+          setForm({ ...defaultForm, ...draft.form });
+          setBailleurCustom(draft.bailleurCustom ?? "");
+          if (typeof draft.step === "number" && draft.step >= 0 && draft.step <= 5) {
+            setStep(draft.step);
+          }
+          setDraftRestored(true);
+        }
+      }
+    } catch {
+      // Snapshot corrompu — on ignore et on repart de zéro.
+    } finally {
+      draftLoaded.current = true;
+    }
+  }, []);
+
+  // Persistance automatique : on n'écrit qu'après la restauration initiale
+  // pour éviter d'écraser le brouillon avec defaultForm au premier render.
+  useEffect(() => {
+    if (!draftLoaded.current || typeof window === "undefined") return;
+    if (generating || blob) return;
+    try {
+      const draft: FormDraft = { step, form, bailleurCustom };
+      window.localStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify(draft));
+    } catch {
+      // Quota dépassé / mode privé : pas critique, on n'interrompt pas l'utilisateur.
+    }
+  }, [step, form, bailleurCustom, generating, blob]);
+
+  const clearDraft = () => {
+    if (typeof window !== "undefined") {
+      try { window.localStorage.removeItem(DRAFT_STORAGE_KEY); } catch { /* noop */ }
+    }
+    setDraftRestored(false);
+  };
 
   const set = (field: keyof ProjectFormData, value: unknown) =>
     setForm((prev) => ({ ...prev, [field]: value }));
@@ -106,7 +134,7 @@ export default function Stepper() {
         ...(extracted.nom && { nom: extracted.nom }),
         ...(extracted.pays && { pays: extracted.pays }),
         ...(extracted.secteur && { secteur: extracted.secteur }),
-        ...(extracted.bailleur && { bailleur: BAILLEURS.includes(extracted.bailleur) ? extracted.bailleur : "Autre" }),
+        ...(extracted.bailleur && { bailleur: (BAILLEURS as readonly string[]).includes(extracted.bailleur) ? extracted.bailleur : "Autre" }),
         ...(extracted.probleme_principal && { probleme_principal: extracted.probleme_principal }),
         ...(extracted.objectif_global && { objectif_global: extracted.objectif_global }),
         ...(extracted.objectifs_specifiques?.length && { objectifs_specifiques: extracted.objectifs_specifiques }),
@@ -119,7 +147,7 @@ export default function Stepper() {
         ...(extracted.risques_identifies && { risques_identifies: extracted.risques_identifies }),
       }));
       // Si le bailleur extrait n'est pas dans la liste, le mettre dans le champ custom
-      if (extracted.bailleur && !BAILLEURS.includes(extracted.bailleur)) {
+      if (extracted.bailleur && !(BAILLEURS as readonly string[]).includes(extracted.bailleur)) {
         setBailleurCustom(extracted.bailleur);
       }
     } catch (e) {
@@ -156,13 +184,15 @@ export default function Stepper() {
     setBlob(null);
     const allPdfs = [...budgetPdfs, ...referencePdfs];
     try {
-      const result = await generateDocument({
+      // Le endpoint renvoie directement le .docx (génération IA + mise en forme + persistance).
+      const docxBlob = await generateDocument({
         ...form,
         bailleur: form.bailleur === "Autre" ? bailleurCustom : form.bailleur,
         objectifs_specifiques: form.objectifs_specifiques.filter((o) => o.trim()),
         reference_pdfs: allPdfs.length > 0 ? allPdfs.map((f) => f.b64) : undefined,
       });
-      setBlob(result);
+      setBlob(docxBlob);
+      clearDraft();
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Erreur inconnue");
     } finally {
@@ -187,12 +217,14 @@ export default function Stepper() {
                 setBlob(null);
                 setError(null);
                 setGenerating(false);
+               
                 setStep(0);
                 setForm(defaultForm);
                 setBailleurCustom("");
                 setBudgetPdfs([]);
                 setReferencePdfs([]);
                 setPrefillError(null);
+                clearDraft();
               }}
               className="btn-secondary"
             >
@@ -203,7 +235,7 @@ export default function Stepper() {
         {error && (
           <div className="flex justify-center gap-3 mt-4 flex-wrap">
             <button
-              onClick={handleGenerate}
+              onClick={() => { handleGenerate(); }}
               className="btn-primary"
             >
               ↺ Réessayer
@@ -217,12 +249,14 @@ export default function Stepper() {
             <button
               onClick={() => {
                 setError(null);
+               
                 setStep(0);
                 setForm(defaultForm);
                 setBailleurCustom("");
                 setBudgetPdfs([]);
                 setReferencePdfs([]);
                 setPrefillError(null);
+                clearDraft();
               }}
               className="btn-secondary"
             >
@@ -236,6 +270,33 @@ export default function Stepper() {
 
   return (
     <div className="max-w-2xl mx-auto">
+      {draftRestored && (
+        <div className="mb-4 flex items-center justify-between gap-3 rounded-lg border border-vert-sauge/40 bg-vert-sauge/10 px-4 py-2 font-source text-sm text-bleu-marine">
+          <span>↻ Brouillon restauré automatiquement.</span>
+          <div className="flex gap-3">
+            <button
+              type="button"
+              onClick={() => setDraftRestored(false)}
+              className="text-xs font-semibold text-bleu-marine hover:underline"
+            >
+              Continuer
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setForm(defaultForm);
+                setBailleurCustom("");
+                setStep(0);
+                clearDraft();
+              }}
+              className="text-xs font-semibold text-red-500 hover:underline"
+            >
+              Réinitialiser
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Barre d'étapes */}
       <div className="flex items-center mb-8">
         {STEP_LABELS.map((label, i) => (

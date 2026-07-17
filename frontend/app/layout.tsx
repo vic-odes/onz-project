@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import "./globals.css";
 import Navbar from "@/components/Navbar";
+import { AuthProvider } from "@/contexts/AuthContext";
 
 export const metadata: Metadata = {
   title: "ONZ Projet — Assistant de Montage de Projets",
@@ -16,11 +17,13 @@ export default function RootLayout({
   return (
     <html lang="fr">
       <body className="min-h-screen bg-creme">
-        <Navbar />
-        <main className="min-h-[calc(100vh-64px)]">{children}</main>
-        <footer className="bg-bleu-marine text-white text-center py-4 text-sm font-source">
-          © {new Date().getFullYear()} ONZ Projet — Tous droits réservés
-        </footer>
+        <AuthProvider>
+          <Navbar />
+          <main className="min-h-[calc(100vh-64px)]">{children}</main>
+          <footer className="bg-bleu-marine text-white text-center py-4 text-sm font-source">
+            © {new Date().getFullYear()} ONZ Projet — Tous droits réservés
+          </footer>
+        </AuthProvider>
       </body>
     </html>
   );

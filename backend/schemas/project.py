@@ -1,6 +1,8 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from typing import Optional, List
 from datetime import datetime
+
+from services.pdf_validation import validate_reference_pdfs, PdfValidationError
 
 
 class ProjectCreate(BaseModel):
@@ -25,6 +27,17 @@ class ProjectCreate(BaseModel):
     # PDFs de référence encodés en base64 (optionnel)
     reference_pdfs: Optional[List[str]] = None
 
+    @field_validator("reference_pdfs")
+    @classmethod
+    def _check_pdfs(cls, v: Optional[List[str]]) -> Optional[List[str]]:
+        if not v:
+            return v
+        try:
+            validate_reference_pdfs(v)
+        except PdfValidationError as e:
+            raise ValueError(str(e))
+        return v
+
 
 class ProjectResponse(BaseModel):
     id: int
@@ -37,6 +50,7 @@ class ProjectResponse(BaseModel):
     budget_total: Optional[float]
     duree_mois: Optional[int]
     created_at: datetime
+    docx_path: Optional[str] = None
 
     class Config:
         from_attributes = True

@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(venv/Scripts/python -c ' *)",
+      "Bash(taskkill //IM python.exe //F)",
+      "Bash(taskkill //F //PID 25764)",
+      "Bash(taskkill //IM \"python.exe\" //F /T)",
+      "Bash(taskkill -F -PID 25764)"
+    ]
+  }
+}
