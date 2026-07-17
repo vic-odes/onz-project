@@ -33,6 +33,10 @@ param tags object = {
 @secure()
 param llmApiKey string = ''
 
+@description('Secret de signature des JWT (HS256). DOIT être stable entre déploiements — le changer invalide toutes les sessions. Générer : python -c "import secrets; print(secrets.token_urlsafe(64))". Laisser vide pour ne pas créer/écraser le secret.')
+@secure()
+param jwtSecretKey string = ''
+
 // -----------------------------------------------------------------------------
 // Noms de ressources (les ressources globalement uniques utilisent uniqueString)
 // -----------------------------------------------------------------------------
@@ -169,6 +173,14 @@ resource llmSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = if (!empty(l
   name: 'llm-api-key'
   properties: {
     value: llmApiKey
+  }
+}
+
+resource jwtSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = if (!empty(jwtSecretKey)) {
+  parent: keyVault
+  name: 'jwt-secret-key'
+  properties: {
+    value: jwtSecretKey
   }
 }
 

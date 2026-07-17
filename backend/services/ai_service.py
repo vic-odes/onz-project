@@ -1,104 +1,50 @@
-import os
 import io
 import base64
 import json
 import logging
-import litellm
-from dotenv import load_dotenv
+import os
+from typing import Optional
 
-load_dotenv(override=True)
-
-litellm.drop_params = True
+from services import llm_client, prompts
 
 logger = logging.getLogger(__name__)
-MODEL = os.getenv("LLM_MODEL", "claude-sonnet-4-20250514")
-# Plafond de jetons de sortie par requête. Le document complet (cadre logique,
-# budget, note conceptuelle, résumé exécutif…) dépasse facilement 8 000 jetons ;
-# une valeur trop basse tronque la réponse en plein JSON.
-MAX_OUTPUT_TOKENS = int(os.getenv("LLM_MAX_TOKENS", "16000"))
 
-SYSTEM_PROMPT = """
-Tu es un expert senior en montage de projets de développement international,
-avec 20 ans d'expérience auprès de bailleurs comme l'AFD, l'Union Européenne,
-la Banque Mondiale et le PNUD.
+# Limite du texte extrait pour éviter le dépassement de contexte (indépendante du modèle)
+_MAX_EXTRACTED_CHARS = 3000
 
-Tu maîtrises parfaitement :
-- Le cadre logique (Logical Framework Approach)
-- Les indicateurs SMART
-- L'analyse des parties prenantes
-- La gestion axée sur les résultats (GAR)
-- L'analyse coût-bénéfice des projets de développement
-- Les standards de rédaction de chaque bailleur
 
-Réponds UNIQUEMENT en JSON valide, sans markdown ni backticks.
-Toutes les sections doivent être rédigées en français professionnel.
-Ne laisse aucune section vide. Si une information manque, complète intelligemment
-sur la base du secteur et du pays fournis.
-"""
+def _compute_max_tokens(supports_native_pdf: bool) -> int:
+    """Retourne le plafond de tokens à passer au modèle.
+
+    Défaut : 16000. Justification :
+    - Le JSON complet d'un projet pèse 4-8k tokens de sortie utile.
+    - Les modèles à raisonnement (GPT-5, o1, o3…) consomment en plus 2-6k
+      tokens de raisonnement *invisibles* imputés sur la même limite.
+    - Marge de sécurité pour les projets longs (résumé exécutif + note
+      conceptuelle activés, plusieurs PDFs de référence).
+
+    `LLM_MAX_TOKENS` (env) reste prioritaire pour ajuster vers le bas si
+    le plan/la licence du modèle est plus restrictif (Mistral Small 4096,
+    GPT-3.5 Turbo, etc.).
+    """
+    env_val = os.getenv("LLM_MAX_TOKENS")
+    if env_val:
+        return int(env_val)
+    return 16000
+
+
+# Les prompts vivent dans backend/prompts/*.md (chargement paresseux + cache).
+def _system_prompt() -> str:
+    return prompts.load("system_generate")
 
 
 def _build_user_prompt(project_data: dict, has_references: bool) -> str:
-    reference_note = (
-        "\nLes documents de référence joints (rapports précédents, appels à projets, "
-        "guidelines du bailleur) doivent guider et enrichir le contenu généré. "
-        "Tiens compte de leur contenu, de leur structure et de leur terminologie.\n"
-        if has_references else ""
+    template = prompts.load("user_generate")
+    reference_note = "\n" + prompts.load("reference_note") + "\n" if has_references else ""
+    return template.format(
+        project_data_json=json.dumps(project_data, ensure_ascii=False, indent=2),
+        reference_note=reference_note,
     )
-    return f"""
-Génère un document complet de projet de développement international basé sur ces informations :
-
-{json.dumps(project_data, ensure_ascii=False, indent=2)}
-{reference_note}
-Réponds avec un objet JSON contenant exactement ces clés :
-{{
-  "introduction": "...",
-  "cadre_logique": {{
-    "objectif_global": "...",
-    "objectifs_specifiques": [],
-    "resultats": [],
-    "activites": [],
-    "indicateurs_smart": [],
-    "sources_verification": [],
-    "hypotheses": []
-  }},
-  "parties_prenantes": [],
-  "activites_detaillees": [],
-  "chronogramme": [],
-  "budget": {{
-    "lignes": [],
-    "total_usd": 0,
-    "couts_directs": 0,
-    "couts_indirects": 0
-  }},
-  "analyse_cout_benefice": {{
-    "van": 0,
-    "ratio_cout_benefice": 0,
-    "scenario_central": "...",
-    "scenario_pessimiste": "...",
-    "justification": "..."
-  }},
-  "risques": [],
-  "communication": "...",
-  "note_conceptuelle": "...",
-  "resume_executif": "..."
-}}
-
-Règles importantes :
-- introduction : minimum 300 mots, contexte pays + problématique + justification
-- cadre_logique.objectifs_specifiques : liste de chaînes de caractères
-- cadre_logique.resultats : liste de chaînes de caractères
-- cadre_logique.activites : liste de chaînes de caractères
-- cadre_logique.indicateurs_smart : liste de chaînes de caractères (format : Indicateur - Baseline - Cible - Délai)
-- cadre_logique.sources_verification : liste de chaînes de caractères
-- cadre_logique.hypotheses : liste de chaînes de caractères
-- parties_prenantes : liste d'objets avec clés "nom", "role", "interet", "influence" (Faible/Moyen/Fort)
-- activites_detaillees : liste d'objets avec clés "titre", "description", "responsable", "duree", "objectif_lie"
-- chronogramme : liste d'objets avec clés "trimestre" (T1, T2...), "activites" (liste de chaînes)
-- budget.lignes : liste d'objets avec clés "categorie", "description", "montant_usd", "pourcentage"
-- risques : liste d'objets avec clés "risque", "probabilite" (Faible/Moyen/Élevé), "impact" (Faible/Moyen/Élevé), "mitigation"
-- note_conceptuelle : résumé 1 page si generer_note_conceptuelle est true, sinon chaîne vide
-- resume_executif : synthèse 500 mots si inclure_resume_executif est true, sinon chaîne vide
-"""
 
 
 def _extract_text_from_pdfs(pdfs_b64: list[str]) -> str:
@@ -118,65 +64,24 @@ def _extract_text_from_pdfs(pdfs_b64: list[str]) -> str:
     return "\n\n".join(texts)
 
 
-async def _call_llm(messages: list, extra: dict) -> str:
-    logger.debug("Appel LLM — modèle=%s messages=%d extra_keys=%s", MODEL, len(messages), list(extra.keys()))
-    try:
-        response = await litellm.acompletion(
-            model=MODEL,
-            messages=messages,
-            max_tokens=MAX_OUTPUT_TOKENS,
-            temperature=0.3,
-            # Mode JSON natif (OpenAI/Azure) — fiabilise la sortie ; supprimé
-            # automatiquement par litellm.drop_params pour les modèles qui ne
-            # le supportent pas.
-            response_format={"type": "json_object"},
-            **extra,
-        )
-    except Exception:
-        logger.exception("Erreur lors de l'appel LiteLLM (modèle=%s)", MODEL)
-        raise
-    finish_reason = response.choices[0].finish_reason
-    content = response.choices[0].message.content
-    logger.debug("Réponse LLM reçue — finish_reason=%s content_len=%s",
-                 finish_reason,
-                 len(content) if content else "None")
-    if finish_reason == "length":
-        logger.error("Réponse tronquée — plafond de %d jetons de sortie atteint", MAX_OUTPUT_TOKENS)
-        raise ValueError(
-            f"La réponse du modèle a été tronquée (plafond de {MAX_OUTPUT_TOKENS} jetons atteint). "
-            "Augmentez LLM_MAX_TOKENS ou désactivez certaines options "
-            "(note conceptuelle, résumé exécutif) pour réduire la longueur du document."
-        )
-    if not content:
-        logger.error("Le modèle a retourné un contenu vide (finish_reason=%s)", finish_reason)
-        raise ValueError("Le modèle a retourné une réponse vide.")
-    raw = content.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
-    if not raw:
-        logger.error("Contenu vide après nettoyage des balises markdown. Contenu brut: %r", content[:200])
-        raise ValueError("Le modèle a retourné une réponse vide après nettoyage des balises.")
-    return raw
-
-
 async def generate_project_content(project_data: dict, reference_pdfs: list[str] | None = None) -> dict:
     """
     Génère le contenu complet du projet via LiteLLM.
     Si des PDFs de référence sont fournis, ils sont envoyés directement au modèle.
     En cas d'échec (modèle non-vision), le texte est extrait et réinjecté dans le prompt.
-    """
-    # Paramètres Azure passés explicitement si disponibles
-    extra = {}
-    if os.getenv("AZURE_API_KEY"):
-        extra["api_key"] = os.getenv("AZURE_API_KEY")
-    if os.getenv("AZURE_API_BASE"):
-        extra["api_base"] = os.getenv("AZURE_API_BASE")
-    if os.getenv("AZURE_API_VERSION"):
-        extra["api_version"] = os.getenv("AZURE_API_VERSION")
 
+    Les capacités du modèle (PDF natif, max_tokens) sont relues à chaque appel pour
+    permettre le hot-swap de `LLM_MODEL` sans redémarrage.
+    """
+    supports_native_pdf = llm_client.supports_native_pdf()
+    max_tokens = _compute_max_tokens(supports_native_pdf)
     user_prompt = _build_user_prompt(project_data, bool(reference_pdfs))
 
-    # Construction des messages — avec documents natifs si PDFs fournis
-    if reference_pdfs:
-        content: list = [
+    # Construction des messages
+    # Les blocs "document" natifs ne sont supportés que par Anthropic/Claude
+    if reference_pdfs and supports_native_pdf:
+        logger.debug("Mode PDF natif (Claude) — %d document(s)", len(reference_pdfs))
+        pdf_blocks: list = [
             {
                 "type": "document",
                 "source": {
@@ -187,46 +92,64 @@ async def generate_project_content(project_data: dict, reference_pdfs: list[str]
             }
             for pdf_b64 in reference_pdfs
         ]
-        content.append({"type": "text", "text": user_prompt})
+        pdf_blocks.append({"type": "text", "text": user_prompt})
         messages = [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": content},
+            {"role": "system", "content": _system_prompt()},
+            {"role": "user", "content": pdf_blocks},
+        ]
+    elif reference_pdfs:
+        # Modèle non-Claude : extraction directe sans aller-retour inutile
+        logger.debug("Mode extraction texte (non-Claude) — %d document(s)", len(reference_pdfs))
+        extracted = _extract_text_from_pdfs(reference_pdfs)
+        if extracted:
+            extracted_truncated = extracted[:_MAX_EXTRACTED_CHARS]
+            if len(extracted) > _MAX_EXTRACTED_CHARS:
+                logger.info("Texte extrait tronqué à %d/%d caractères", _MAX_EXTRACTED_CHARS, len(extracted))
+            else:
+                logger.info("Texte extrait — %d caractères", len(extracted))
+            user_prompt = user_prompt + f"\n\nDocuments de référence (texte extrait) :\n{extracted_truncated}"
+        else:
+            logger.warning("Aucun texte extrait des PDFs — génération sans documents")
+        messages = [
+            {"role": "system", "content": _system_prompt()},
+            {"role": "user", "content": user_prompt},
         ]
     else:
         messages = [
-            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "system", "content": _system_prompt()},
             {"role": "user", "content": user_prompt},
         ]
 
     try:
-        raw = await _call_llm(messages, extra)
+        raw = await llm_client.call_llm(messages, max_tokens=max_tokens)
     except Exception as e:
-        # Fallback : le modèle ne supporte pas les documents — extraction texte + retry
-        if reference_pdfs:
-            logger.warning("Échec appel natif avec PDFs (%s) — bascule sur extraction texte", type(e).__name__)
+        # Fallback uniquement pour Claude (si le modèle refuse les document blocks)
+        if reference_pdfs and supports_native_pdf:
+            logger.warning("Échec PDF natif Claude (%s) — bascule sur extraction texte", type(e).__name__)
             extracted = _extract_text_from_pdfs(reference_pdfs)
+            fallback_prompt = user_prompt
             if extracted:
-                logger.info("Texte extrait des PDFs — %d caractères", len(extracted))
-                fallback_prompt = (
-                    user_prompt
-                    + f"\n\nDocuments de référence (texte extrait) :\n{extracted}"
-                )
-            else:
-                logger.warning("Aucun texte extrait des PDFs — génération sans documents")
-                fallback_prompt = user_prompt
+                extracted_truncated = extracted[:_MAX_EXTRACTED_CHARS]
+                logger.info("Texte extrait (fallback) — %d caractères", len(extracted_truncated))
+                fallback_prompt = user_prompt + f"\n\nDocuments de référence (texte extrait) :\n{extracted_truncated}"
             fallback_messages = [
-                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "system", "content": _system_prompt()},
                 {"role": "user", "content": fallback_prompt},
             ]
-            raw = await _call_llm(fallback_messages, extra)
+            raw = await llm_client.call_llm(fallback_messages, max_tokens=max_tokens)
         else:
-            logger.exception("Erreur génération sans PDFs — pas de fallback possible")
+            logger.exception("Erreur génération — pas de fallback possible")
             raise
 
-    try:
-        result = json.loads(raw)
-        logger.debug("JSON parsé avec succès — %d clés de premier niveau", len(result))
-        return result
-    except json.JSONDecodeError:
-        logger.error("JSON invalide retourné. Début du contenu brut: %r", raw[:500])
-        raise
+    result = llm_client.parse_json_response(raw)
+    logger.debug("JSON parsé avec succès — %d clés de premier niveau", len(result))
+
+    # Validation Pydantic : top-level strict, nested permissif. Évite les sections
+    # silencieusement vides côté docx_service quand le modèle a oublié des clés.
+    from schemas.generated import GeneratedContent
+    validated = GeneratedContent.model_validate(result)
+    logger.info(
+        "Sortie LLM validée — %d parties_prenantes, %d activités, %d risques",
+        len(validated.parties_prenantes), len(validated.activites_detaillees), len(validated.risques),
+    )
+    return validated.model_dump()

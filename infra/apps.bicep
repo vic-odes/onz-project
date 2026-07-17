@@ -83,6 +83,7 @@ param frontendMaxReplicas int = 3
 var backendName = '${namePrefix}-backend'
 var frontendName = '${namePrefix}-frontend'
 var keyVaultSecretUri = 'https://${keyVaultName}${environment().suffixes.keyvaultDns}/secrets/llm-api-key'
+var jwtSecretUri = 'https://${keyVaultName}${environment().suffixes.keyvaultDns}/secrets/jwt-secret-key'
 
 // Variables Azure OpenAI ajoutées uniquement si un endpoint est fourni
 var azureExtraEnv = empty(azureApiBase) ? [] : [
@@ -112,6 +113,20 @@ var backendBaseEnv = [
   {
     name: 'CORS_ORIGINS'
     value: frontendUrl
+  }
+  {
+    name: 'JWT_SECRET_KEY'
+    secretRef: 'jwt-secret-key'
+  }
+  {
+    // Front et backend partagent le domaine enregistrable azurecontainerapps.io
+    // (absent de la Public Suffix List) → requêtes same-site → SameSite=Lax OK.
+    name: 'AUTH_COOKIE_SECURE'
+    value: 'true'
+  }
+  {
+    name: 'AUTH_COOKIE_SAMESITE'
+    value: 'lax'
   }
   {
     name: llmApiKeyEnvVar
@@ -151,6 +166,11 @@ resource backend 'Microsoft.App/containerApps@2024-03-01' = {
         {
           name: 'llm-api-key'
           keyVaultUrl: keyVaultSecretUri
+          identity: managedIdentityId
+        }
+        {
+          name: 'jwt-secret-key'
+          keyVaultUrl: jwtSecretUri
           identity: managedIdentityId
         }
       ]
