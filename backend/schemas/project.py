@@ -24,6 +24,7 @@ class ProjectCreate(BaseModel):
     part_couts_operationnels: Optional[int] = 30
     generer_note_conceptuelle: bool = False
     inclure_resume_executif: bool = False
+    inclure_perennisation: bool = False
     # PDFs de référence encodés en base64 (optionnel)
     reference_pdfs: Optional[List[str]] = None
 

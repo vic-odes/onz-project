@@ -12,6 +12,23 @@ BLEU_MARINE = RGBColor(0x1B, 0x3A, 0x5C)
 VERT_SAUGE = RGBColor(0x4A, 0x7C, 0x59)
 GRIS_CLAIR = RGBColor(0xF0, 0xF0, 0xF0)
 
+_ROMAN = [
+    "", "I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX", "X",
+    "XI", "XII", "XIII", "XIV", "XV", "XVI", "XVII", "XVIII", "XIX", "XX",
+]
+
+
+def _roman(n: int) -> str:
+    """Chiffre romain pour la numérotation dynamique des sections (1..20)."""
+    return _ROMAN[n] if 0 < n < len(_ROMAN) else str(n)
+
+
+def _fmt_usd(value) -> str:
+    try:
+        return f"${float(value):,.0f} USD"
+    except (TypeError, ValueError):
+        return "N/A"
+
 
 def _set_cell_bg(cell, hex_color: str):
     tc = cell._tc
@@ -75,6 +92,38 @@ def _add_paragraph(doc: Document, text: str):
     return p
 
 
+def _add_bullets(doc: Document, items):
+    """Ajoute une liste à puces mise en forme (pattern répété dans le document)."""
+    for item in items:
+        if item is None or str(item).strip() == "":
+            continue
+        p = doc.add_paragraph(str(item), style="List Bullet")
+        for run in p.runs:
+            run.font.name = "Calibri"
+            run.font.size = Pt(11)
+
+
+def _add_flow_step(doc: Document, label: str, content: str, *, last: bool = False):
+    """Un maillon de chaîne causale (théorie du changement) suivi d'une flèche."""
+    p = doc.add_paragraph()
+    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    run = p.add_run(label)
+    run.font.name = "Calibri"
+    run.font.size = Pt(11)
+    run.bold = True
+    run.font.color.rgb = BLEU_MARINE
+    if content:
+        run2 = p.add_run(f" : {content}")
+        run2.font.name = "Calibri"
+        run2.font.size = Pt(11)
+    if not last:
+        arrow = doc.add_paragraph("↓")
+        arrow.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        for r in arrow.runs:
+            r.font.size = Pt(12)
+            r.font.color.rgb = VERT_SAUGE
+
+
 def _add_table_with_headers(doc: Document, headers: list[str], rows: list[list[str]]):
     table = doc.add_table(rows=1, cols=len(headers))
     table.style = "Table Grid"
@@ -116,6 +165,14 @@ def create_word_document(project_data: dict, generated: dict) -> bytes:
 
     project_name = project_data.get("nom", "Projet")
     _add_header_footer(doc, project_name)
+
+    # Compteur de sections : numérotation romaine dynamique (les sections
+    # optionnelles ne créent pas de trou dans la numérotation).
+    _counter = {"n": 0}
+
+    def section_title(title: str):
+        _counter["n"] += 1
+        return _add_title(doc, f"{_roman(_counter['n'])}. {title}", 1)
 
     # ------------------------------------------------------------------ #
     # PAGE DE GARDE
@@ -164,41 +221,92 @@ def create_word_document(project_data: dict, generated: dict) -> bytes:
     doc.add_page_break()
 
     # ------------------------------------------------------------------ #
-    # I. INTRODUCTION
+    # INTRODUCTION
     # ------------------------------------------------------------------ #
-    _add_title(doc, "I. Introduction", 1)
+    section_title("Introduction")
     _add_paragraph(doc, generated.get("introduction", ""))
     doc.add_paragraph()
 
     # ------------------------------------------------------------------ #
-    # II. CADRE LOGIQUE
+    # ARBRE À PROBLÈMES / OBJECTIFS (optionnel)
     # ------------------------------------------------------------------ #
-    _add_title(doc, "II. Cadre Logique", 1)
+    arbre = generated.get("arbre_problemes") or {}
+    if any(arbre.get(k) for k in ("probleme_central", "causes", "consequences", "objectif_central")):
+        section_title("Arbre à problèmes et arbre à objectifs")
+
+        _add_title(doc, "Arbre à problèmes", 2)
+        if arbre.get("probleme_central"):
+            p = doc.add_paragraph()
+            run = p.add_run(f"Problème central : {arbre.get('probleme_central')}")
+            run.font.name = "Calibri"
+            run.font.size = Pt(11)
+            run.bold = True
+            run.font.color.rgb = BLEU_MARINE
+        if arbre.get("causes"):
+            _add_title(doc, "Causes (racines)", 2)
+            _add_bullets(doc, arbre.get("causes", []))
+        if arbre.get("consequences"):
+            _add_title(doc, "Conséquences (effets)", 2)
+            _add_bullets(doc, arbre.get("consequences", []))
+
+        if any(arbre.get(k) for k in ("objectif_central", "moyens", "fins")):
+            _add_title(doc, "Arbre à objectifs", 2)
+            if arbre.get("objectif_central"):
+                p = doc.add_paragraph()
+                run = p.add_run(f"Objectif central : {arbre.get('objectif_central')}")
+                run.font.name = "Calibri"
+                run.font.size = Pt(11)
+                run.bold = True
+                run.font.color.rgb = VERT_SAUGE
+            if arbre.get("moyens"):
+                _add_title(doc, "Moyens", 2)
+                _add_bullets(doc, arbre.get("moyens", []))
+            if arbre.get("fins"):
+                _add_title(doc, "Fins", 2)
+                _add_bullets(doc, arbre.get("fins", []))
+        doc.add_paragraph()
+
+    # ------------------------------------------------------------------ #
+    # THÉORIE DU CHANGEMENT (optionnel)
+    # ------------------------------------------------------------------ #
+    toc = generated.get("theorie_changement") or {}
+    if any(toc.get(k) for k in ("narratif", "probleme", "impact", "activites", "resultats")):
+        section_title("Théorie du changement")
+        if toc.get("narratif"):
+            _add_paragraph(doc, toc.get("narratif"))
+            doc.add_paragraph()
+
+        # Chaîne causale Problème → Impact
+        _add_flow_step(doc, "Problème", toc.get("probleme", ""))
+        _add_flow_step(doc, "Causes", " · ".join(toc.get("causes", [])))
+        _add_flow_step(doc, "Activités", " · ".join(toc.get("activites", [])))
+        _add_flow_step(doc, "Résultats", " · ".join(toc.get("resultats", [])))
+        _add_flow_step(doc, "Effets", " · ".join(toc.get("effets", [])))
+        _add_flow_step(doc, "Impact", toc.get("impact", ""), last=True)
+
+        if toc.get("hypotheses"):
+            doc.add_paragraph()
+            _add_title(doc, "Hypothèses sous-jacentes", 2)
+            _add_bullets(doc, toc.get("hypotheses", []))
+        doc.add_paragraph()
+
+    # ------------------------------------------------------------------ #
+    # CADRE LOGIQUE
+    # ------------------------------------------------------------------ #
+    section_title("Cadre Logique")
     cadre = generated.get("cadre_logique", {})
 
     _add_title(doc, "Objectif Global", 2)
     _add_paragraph(doc, cadre.get("objectif_global", ""))
 
     _add_title(doc, "Objectifs Spécifiques", 2)
-    for obj in cadre.get("objectifs_specifiques", []):
-        p = doc.add_paragraph(obj, style="List Bullet")
-        for run in p.runs:
-            run.font.name = "Calibri"
-            run.font.size = Pt(11)
+    _add_bullets(doc, cadre.get("objectifs_specifiques", []))
 
     _add_title(doc, "Résultats Attendus", 2)
-    for res in cadre.get("resultats", []):
-        p = doc.add_paragraph(res, style="List Bullet")
-        for run in p.runs:
-            run.font.name = "Calibri"
-            run.font.size = Pt(11)
+    _add_bullets(doc, cadre.get("resultats", []))
 
     _add_title(doc, "Activités Principales", 2)
-    for act in cadre.get("activites", []):
-        p = doc.add_paragraph(act, style="List Bullet")
-        for run in p.runs:
-            run.font.name = "Calibri"
-            run.font.size = Pt(11)
+    _add_bullets(doc, cadre.get("activites", []))
 
     _add_title(doc, "Indicateurs SMART", 2)
     indicators = cadre.get("indicateurs_smart", [])
@@ -210,25 +318,39 @@ def create_word_document(project_data: dict, generated: dict) -> bytes:
         )
 
     _add_title(doc, "Sources de Vérification", 2)
-    for sv in cadre.get("sources_verification", []):
-        p = doc.add_paragraph(sv, style="List Bullet")
-        for run in p.runs:
-            run.font.name = "Calibri"
-            run.font.size = Pt(11)
+    _add_bullets(doc, cadre.get("sources_verification", []))
 
     _add_title(doc, "Hypothèses et Conditions Préalables", 2)
-    for hyp in cadre.get("hypotheses", []):
-        p = doc.add_paragraph(hyp, style="List Bullet")
-        for run in p.runs:
-            run.font.name = "Calibri"
-            run.font.size = Pt(11)
+    _add_bullets(doc, cadre.get("hypotheses", []))
+
+    # Matrice complète UE/AFD (Logique / Indicateur / Baseline / Cible / Source / Hypothèse)
+    matrice = cadre.get("matrice", [])
+    if matrice:
+        _add_title(doc, "Matrice du Cadre Logique (format UE/AFD)", 2)
+        rows = [
+            [
+                m.get("niveau", ""),
+                m.get("logique_intervention", ""),
+                m.get("indicateurs", ""),
+                m.get("baseline", ""),
+                m.get("cible", ""),
+                m.get("sources_verification", ""),
+                m.get("hypotheses", ""),
+            ]
+            for m in matrice
+        ]
+        _add_table_with_headers(
+            doc,
+            ["Niveau", "Logique d'intervention", "Indicateurs", "Baseline", "Cible", "Sources", "Hypothèses"],
+            rows,
+        )
 
     doc.add_page_break()
 
     # ------------------------------------------------------------------ #
-    # III. PARTIES PRENANTES
+    # PARTIES PRENANTES
     # ------------------------------------------------------------------ #
-    _add_title(doc, "III. Analyse des Parties Prenantes", 1)
+    section_title("Analyse des Parties Prenantes")
     parties = generated.get("parties_prenantes", [])
     if parties:
         rows = [
@@ -237,15 +359,20 @@ def create_word_document(project_data: dict, generated: dict) -> bytes:
                 p.get("role", ""),
                 p.get("interet", ""),
                 p.get("influence", ""),
+                p.get("quadrant", ""),
             ]
             for p in parties
         ]
-        _add_table_with_headers(doc, ["Acteur", "Rôle", "Intérêt", "Influence"], rows)
+        _add_table_with_headers(
+            doc,
+            ["Acteur", "Rôle", "Intérêt", "Influence", "Quadrant pouvoir/intérêt"],
+            rows,
+        )
 
     # ------------------------------------------------------------------ #
-    # IV. PLANIFICATION DES ACTIVITÉS
+    # PLANIFICATION DES ACTIVITÉS
     # ------------------------------------------------------------------ #
-    _add_title(doc, "IV. Planification des Activités", 1)
+    section_title("Planification des Activités")
     activites = generated.get("activites_detaillees", [])
     if activites:
         rows = [
@@ -276,9 +403,9 @@ def create_word_document(project_data: dict, generated: dict) -> bytes:
     doc.add_page_break()
 
     # ------------------------------------------------------------------ #
-    # V. BUDGET
+    # BUDGET
     # ------------------------------------------------------------------ #
-    _add_title(doc, "V. Budget Prévisionnel", 1)
+    section_title("Budget Prévisionnel")
     budget = generated.get("budget", {})
     lignes = budget.get("lignes", [])
     if lignes:
@@ -310,52 +437,139 @@ def create_word_document(project_data: dict, generated: dict) -> bytes:
 
     doc.add_paragraph()
 
+    # Ventilation annuelle (projet multi-annuel)
+    par_annee = budget.get("par_annee", [])
+    if par_annee:
+        _add_title(doc, "Budget par année", 2)
+        rows = [
+            [
+                b.get("annee", ""),
+                f"${b.get('montant_usd', 0):,.0f}",
+                f"{b.get('pourcentage', 0):.1f}%",
+            ]
+            for b in par_annee
+        ]
+        _add_table_with_headers(doc, ["Année", "Montant (USD)", "% du total"], rows)
+
+    # Ventilation par partenaire
+    par_partenaire = budget.get("par_partenaire", [])
+    if par_partenaire:
+        _add_title(doc, "Budget par partenaire", 2)
+        rows = [
+            [
+                b.get("partenaire", ""),
+                f"${b.get('montant_usd', 0):,.0f}",
+                f"{b.get('pourcentage', 0):.1f}%",
+            ]
+            for b in par_partenaire
+        ]
+        _add_table_with_headers(doc, ["Partenaire", "Montant (USD)", "% du total"], rows)
+
     # ------------------------------------------------------------------ #
-    # VI. ANALYSE COÛT-BÉNÉFICE
+    # PLAN DE FINANCEMENT (optionnel)
     # ------------------------------------------------------------------ #
-    _add_title(doc, "VI. Analyse Coût-Bénéfice", 1)
+    plan = generated.get("plan_financement") or {}
+    plan_lignes = plan.get("lignes", [])
+    if plan_lignes:
+        section_title("Plan de Financement")
+        rows = [
+            [
+                f.get("financeur", ""),
+                f.get("type", ""),
+                f"${f.get('montant_usd', 0):,.0f}",
+                f"{f.get('pourcentage', 0):.1f}%",
+            ]
+            for f in plan_lignes
+        ]
+        _add_table_with_headers(
+            doc,
+            ["Financeur", "Type", "Montant (USD)", "% du total"],
+            rows,
+        )
+        p = doc.add_paragraph()
+        run = p.add_run(
+            f"Total financement : ${plan.get('total_usd', 0):,.0f} USD"
+        )
+        if plan.get("taux_cofinancement"):
+            run2_text = f"  |  Taux de cofinancement : {plan.get('taux_cofinancement')}"
+        else:
+            run2_text = ""
+        run.font.name = "Calibri"
+        run.font.size = Pt(11)
+        run.bold = True
+        run.font.color.rgb = BLEU_MARINE
+        if run2_text:
+            run2 = p.add_run(run2_text)
+            run2.font.name = "Calibri"
+            run2.font.size = Pt(11)
+            run2.bold = True
+            run2.font.color.rgb = BLEU_MARINE
+        doc.add_paragraph()
+
+    doc.add_page_break()
+
+    # ------------------------------------------------------------------ #
+    # ANALYSE COÛT-BÉNÉFICE
+    # ------------------------------------------------------------------ #
+    section_title("Analyse Coût-Bénéfice")
     acb = generated.get("analyse_cout_benefice", {})
     _add_table_with_headers(
         doc,
         ["Indicateur", "Valeur"],
         [
-            ["Valeur Actuelle Nette (VAN)", f"${acb.get('van', 0):,.0f} USD"],
+            ["Valeur Actuelle Nette (VAN)", _fmt_usd(acb.get("van", 0))],
+            ["Taux de Rentabilité Interne (TRI)", f"{acb.get('tri', 0):.1f}%"],
             ["Ratio Coût-Bénéfice", f"{acb.get('ratio_cout_benefice', 0):.2f}"],
+            ["Délai de retour", f"{acb.get('delai_retour_annees', 0):.1f} an(s)"],
+            ["Bénéfices estimés (année 1)", _fmt_usd(acb.get("benefices_annee1_usd", 0))],
             ["Scénario central", acb.get("scenario_central", "")],
             ["Scénario pessimiste", acb.get("scenario_pessimiste", "")],
         ],
     )
+    if acb.get("analyse_sensibilite"):
+        _add_title(doc, "Analyse de sensibilité", 2)
+        _add_paragraph(doc, acb.get("analyse_sensibilite", ""))
     _add_title(doc, "Justification économique", 2)
     _add_paragraph(doc, acb.get("justification", ""))
 
     doc.add_page_break()
 
     # ------------------------------------------------------------------ #
-    # VII. GESTION DES RISQUES
+    # GESTION DES RISQUES
     # ------------------------------------------------------------------ #
-    _add_title(doc, "VII. Gestion des Risques", 1)
+    section_title("Gestion des Risques")
     risques = generated.get("risques", [])
     if risques:
         rows = [
             [
                 r.get("risque", ""),
+                r.get("categorie", ""),
                 r.get("probabilite", ""),
                 r.get("impact", ""),
+                r.get("niveau", ""),
                 r.get("mitigation", ""),
             ]
             for r in risques
         ]
         _add_table_with_headers(
             doc,
-            ["Risque", "Probabilité", "Impact", "Mesure d'atténuation"],
+            ["Risque", "Catégorie", "Probabilité", "Impact", "Niveau", "Mesure d'atténuation"],
             rows,
         )
 
     # ------------------------------------------------------------------ #
-    # VIII. STRATÉGIE DE COMMUNICATION
+    # STRATÉGIE DE COMMUNICATION
     # ------------------------------------------------------------------ #
-    _add_title(doc, "VIII. Stratégie de Communication", 1)
+    section_title("Stratégie de Communication")
     _add_paragraph(doc, generated.get("communication", ""))
+
+    # ------------------------------------------------------------------ #
+    # PÉRENNISATION (optionnelle — flag inclure_perennisation)
+    # ------------------------------------------------------------------ #
+    perennisation = generated.get("perennisation", "")
+    if perennisation and perennisation.strip():
+        section_title("Pérennisation du Projet")
+        _add_paragraph(doc, perennisation)
 
     # ------------------------------------------------------------------ #
     # NOTE CONCEPTUELLE (optionnelle)

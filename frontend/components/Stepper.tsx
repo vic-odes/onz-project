@@ -34,6 +34,7 @@ const defaultForm: ProjectFormData = {
   part_couts_operationnels: 30,
   generer_note_conceptuelle: false,
   inclure_resume_executif: false,
+  inclure_perennisation: false,
 };
 
 interface PdfFile {
@@ -679,6 +680,17 @@ export default function Stepper() {
                 />
                 <span className="font-source text-sm text-bleu-marine font-semibold">
                   Inclure un résumé exécutif (synthèse 500 mots)
+                </span>
+              </label>
+              <label className="flex items-center gap-3 cursor-pointer">
+                <input
+                  type="checkbox"
+                  className="w-4 h-4 accent-bleu-marine"
+                  checked={form.inclure_perennisation}
+                  onChange={(e) => set("inclure_perennisation", e.target.checked)}
+                />
+                <span className="font-source text-sm text-bleu-marine font-semibold">
+                  Ajouter une section pérennisation du projet
                 </span>
               </label>
             </div>
