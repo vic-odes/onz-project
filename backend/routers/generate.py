@@ -1,6 +1,7 @@
 import io
 import json
 import logging
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
@@ -64,10 +65,27 @@ async def generate_document(
     except Exception:
         logger.exception("Erreur sauvegarde SQLite (non bloquant)")
 
-    safe_name = "".join(c if c.isalnum() or c in " _-" else "_" for c in project.nom)
-    filename = f"{safe_name.replace(' ', '_')}_ONZ.docx"
     return StreamingResponse(
         io.BytesIO(docx_bytes),
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        headers={"Content-Disposition": _content_disposition(project.nom)},
     )
+
+
+def _content_disposition(nom: str) -> str:
+    """En-tête Content-Disposition robuste (RFC 6266) pour le téléchargement du .docx.
+
+    Les en-têtes HTTP sont limités à l'ASCII/latin-1 : un nom de projet accentué
+    (« Café », « Éducation ») ou non-latin casse la réponse si on l'injecte brut
+    (`str.isalnum()` est Unicode-aware et laisse passer les accents). On fournit
+    donc deux formes, comme le fait Starlette pour `FileResponse` :
+    - `filename=`  : repli ASCII pur (tout caractère non-ASCII → `_`) ;
+    - `filename*=` : version UTF-8 encodée en pourcentage (RFC 5987), lue en
+      priorité par les navigateurs modernes, qui préserve les accents.
+    """
+    base = f"{(nom or '').strip() or 'Projet'}_ONZ.docx"
+    ascii_fallback = "".join(
+        c if (c.isascii() and (c.isalnum() or c in " _-.")) else "_" for c in base
+    ).replace(" ", "_")
+    utf8_encoded = quote(base, safe="")
+    return f"attachment; filename=\"{ascii_fallback}\"; filename*=UTF-8''{utf8_encoded}"
