@@ -1,15 +1,19 @@
 import logging
 from pathlib import Path
 from fastapi import APIRouter, HTTPException, Depends
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from sqlalchemy.orm import Session
 from typing import List
 from database import get_db
 from dependencies import get_current_user
+from http_utils import content_disposition_attachment
 from models.project import Project
 from models.user import User
 from schemas.project import ProjectResponse
+from services import xlsx_service
 import json
+
+_XLSX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -82,6 +86,34 @@ def download_project(
         path=project.docx_path,
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         filename=filename,
+    )
+
+
+@router.get("/{project_id}/budget.xlsx")
+def download_budget_xlsx(
+    project_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Export Excel du budget détaillé (par catégorie/année/partenaire + plan de
+    financement + coût-bénéfice), construit à la volée depuis le contenu généré."""
+    project = _owned_or_404(db, project_id, current_user.id)
+    generated = json.loads(project.generated_content) if project.generated_content else {}
+    if not generated or not (generated.get("budget") or {}).get("lignes"):
+        raise HTTPException(status_code=404, detail="Budget non disponible pour ce projet")
+
+    project_data = {"nom": project.nom, "pays": project.pays, "secteur": project.secteur}
+    try:
+        xlsx_bytes = xlsx_service.create_budget_workbook(project_data, generated)
+    except Exception:
+        logger.exception("Erreur génération Excel budget — projet %d", project_id)
+        raise HTTPException(status_code=500, detail="Impossible de générer le fichier Excel")
+
+    filename = f"{(project.nom or 'Projet').strip()}_budget_ONZ.xlsx"
+    return Response(
+        content=xlsx_bytes,
+        media_type=_XLSX_MEDIA_TYPE,
+        headers={"Content-Disposition": content_disposition_attachment(filename)},
     )
 
 

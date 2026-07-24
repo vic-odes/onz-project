@@ -1,5 +1,5 @@
 "use client";
-import { ProjectSummary, deleteProject, downloadProject } from "@/lib/api";
+import { ProjectSummary, deleteProject, downloadProject, downloadBudgetExcel } from "@/lib/api";
 import { SECTOR_COLORS, SECTOR_ACCENT } from "@/lib/constants";
 import { useEffect, useRef, useState } from "react";
 
@@ -19,6 +19,7 @@ const clamp2: React.CSSProperties = {
 export default function ProjectCard({ project, onDelete }: ProjectCardProps) {
   const [deleting, setDeleting] = useState(false);
   const [downloading, setDownloading] = useState(false);
+  const [downloadingXlsx, setDownloadingXlsx] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const confirmTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -48,24 +49,44 @@ export default function ProjectCard({ project, onDelete }: ProjectCardProps) {
     }
   };
 
+  // Déclenche le téléchargement d'un blob dans le navigateur.
+  const triggerBlobDownload = (blob: Blob, filename: string) => {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    // Délai avant révocation : révoquer trop tôt annule le téléchargement sur certains navigateurs.
+    setTimeout(() => URL.revokeObjectURL(url), 1500);
+  };
+
+  const safeName = project.nom.replace(/\s+/g, "_") || "projet";
+
   const handleDownload = async () => {
     setError(null);
     setDownloading(true);
     try {
       const blob = await downloadProject(project.id);
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `${project.nom.replace(/\s+/g, "_")}_ONZ.docx`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      // Délai avant révocation : révoquer trop tôt annule le téléchargement sur certains navigateurs.
-      setTimeout(() => URL.revokeObjectURL(url), 1500);
+      triggerBlobDownload(blob, `${safeName}_ONZ.docx`);
     } catch {
       setError("Document non disponible.");
     } finally {
       setDownloading(false);
+    }
+  };
+
+  const handleDownloadExcel = async () => {
+    setError(null);
+    setDownloadingXlsx(true);
+    try {
+      const blob = await downloadBudgetExcel(project.id);
+      triggerBlobDownload(blob, `${safeName}_budget_ONZ.xlsx`);
+    } catch {
+      setError("Budget Excel non disponible.");
+    } finally {
+      setDownloadingXlsx(false);
     }
   };
 
@@ -163,16 +184,28 @@ export default function ProjectCard({ project, onDelete }: ProjectCardProps) {
           ) : (
             <div className="flex items-center gap-1.5">
               {project.docx_path && (
-                <button
-                  type="button"
-                  onClick={handleDownload}
-                  disabled={downloading}
-                  aria-label={`Télécharger le document du projet ${project.nom}`}
-                  className="inline-flex items-center gap-1 rounded-lg border border-vert-sauge px-3 py-1.5 text-sm font-semibold text-vert-sauge
-                             transition-colors hover:bg-vert-sauge hover:text-white disabled:opacity-50 font-source"
-                >
-                  {downloading ? "..." : "⬇ Télécharger"}
-                </button>
+                <>
+                  <button
+                    type="button"
+                    onClick={handleDownload}
+                    disabled={downloading}
+                    aria-label={`Télécharger le document Word du projet ${project.nom}`}
+                    className="inline-flex items-center gap-1 rounded-lg border border-vert-sauge px-3 py-1.5 text-sm font-semibold text-vert-sauge
+                               transition-colors hover:bg-vert-sauge hover:text-white disabled:opacity-50 font-source"
+                  >
+                    {downloading ? "..." : "⬇ Word"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleDownloadExcel}
+                    disabled={downloadingXlsx}
+                    aria-label={`Télécharger le budget Excel du projet ${project.nom}`}
+                    className="inline-flex items-center gap-1 rounded-lg border border-bleu-marine px-3 py-1.5 text-sm font-semibold text-bleu-marine
+                               transition-colors hover:bg-bleu-marine hover:text-white disabled:opacity-50 font-source"
+                  >
+                    {downloadingXlsx ? "..." : "▤ Excel"}
+                  </button>
+                </>
               )}
               <button
                 type="button"

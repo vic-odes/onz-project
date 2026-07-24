@@ -255,6 +255,17 @@ export async function downloadProject(id: number): Promise<Blob> {
   return response.blob();
 }
 
+export async function downloadBudgetExcel(id: number): Promise<Blob> {
+  const response = await apiFetch(`/api/projects/${id}/budget.xlsx`);
+  if (!response.ok) {
+    throw new ApiError(
+      await readErrorMessage(response, "Budget Excel non disponible."),
+      response.status,
+    );
+  }
+  return response.blob();
+}
+
 export async function prefillFromPdf(pdfB64: string): Promise<Partial<ProjectFormData>> {
   const response = await apiFetch("/api/documents/prefill", {
     method: "POST",
