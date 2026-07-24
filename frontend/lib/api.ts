@@ -45,6 +45,36 @@ export interface SessionResponse {
   user: AuthUser;
 }
 
+// Évaluation d'un projet (analyse bailleur + notation) — POST /api/generate/evaluation
+export interface AnalyseBailleur {
+  nom: string;
+  priorites: string[];
+  criteres_eligibilite: string[];
+  montant_max_finançable: string;
+  taux_cofinancement: string;
+  score_compatibilite: number;
+  risques_rejet: string[];
+}
+
+export interface CritereNotation {
+  critere: string;
+  note_sur_20: number;
+  commentaire: string;
+}
+
+export interface Notation {
+  criteres: CritereNotation[];
+  score_total_sur_100: number;
+  points_forts: string[];
+  axes_amelioration: string[];
+  recommandation: string;
+}
+
+export interface Evaluation {
+  analyse_bailleur: AnalyseBailleur;
+  notation: Notation;
+}
+
 export class ApiError extends Error {
   status: number;
   constructor(message: string, status: number) {
@@ -164,6 +194,23 @@ export async function generateDocument(data: ProjectFormData): Promise<Blob> {
     );
   }
   return response.blob();
+}
+
+export async function evaluateProject(data: ProjectFormData): Promise<Evaluation> {
+  // On n'envoie pas les PDFs de référence : l'évaluation porte sur le concept.
+  const { reference_pdfs: _ignored, ...payload } = data;
+  const response = await apiFetch("/api/generate/evaluation", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    throw new ApiError(
+      await readErrorMessage(response, "Erreur lors de l'évaluation du projet."),
+      response.status,
+    );
+  }
+  return response.json();
 }
 
 export async function listProjects(): Promise<ProjectSummary[]> {

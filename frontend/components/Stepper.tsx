@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
-import { generateDocument, prefillFromPdf, ProjectFormData } from "@/lib/api";
+import { evaluateProject, Evaluation, generateDocument, prefillFromPdf, ProjectFormData } from "@/lib/api";
 import { BAILLEURS, SECTEURS, STEP_LABELS } from "@/lib/constants";
 import GenerationLoader from "./GenerationLoader";
 import PdfUpload from "./PdfUpload";
@@ -43,6 +43,52 @@ interface PdfFile {
   b64: string;
 }
 
+// Couleur d'un score sur 100 : vert (fort) / ambre (moyen) / rouge (faible).
+function scoreColor(value: number): string {
+  if (value >= 75) return "text-vert-sauge";
+  if (value >= 50) return "text-amber-600";
+  return "text-red-600";
+}
+
+function scoreBar(value: number): string {
+  if (value >= 75) return "bg-vert-sauge";
+  if (value >= 50) return "bg-amber-500";
+  return "bg-red-500";
+}
+
+function ScoreCard({ label, value, suffix }: { label: string; value: number; suffix: string }) {
+  const pct = Math.max(0, Math.min(100, value));
+  return (
+    <div className="rounded-xl border border-gray-200 p-4 bg-white">
+      <p className="font-source text-xs uppercase tracking-wide text-gray-500">{label}</p>
+      <p className={`font-playfair text-3xl font-bold mt-1 ${scoreColor(value)}`}>
+        {Math.round(value)}<span className="text-lg">{suffix}</span>
+      </p>
+      <div className="h-2 rounded-full bg-gray-100 mt-2 overflow-hidden">
+        <div className={`h-full ${scoreBar(value)}`} style={{ width: `${pct}%` }} />
+      </div>
+    </div>
+  );
+}
+
+function EvalList({ title, items, tone = "neutral" }: { title: string; items: string[]; tone?: "good" | "warn" | "neutral" }) {
+  if (!items || items.length === 0) return null;
+  const marker = tone === "good" ? "text-vert-sauge" : tone === "warn" ? "text-amber-600" : "text-bleu-marine";
+  return (
+    <div>
+      <p className="font-source text-sm font-semibold text-bleu-marine mb-1">{title}</p>
+      <ul className="space-y-1">
+        {items.map((it, i) => (
+          <li key={i} className="font-source text-sm text-gray-700 flex gap-2">
+            <span className={marker}>•</span>
+            <span>{it}</span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 export default function Stepper() {
   const [step, setStep] = useState(0);
   const [form, setForm] = useState<ProjectFormData>(defaultForm);
@@ -56,6 +102,10 @@ export default function Stepper() {
   const [error, setError] = useState<string | null>(null);
   const [draftRestored, setDraftRestored] = useState(false);
   const draftLoaded = useRef(false);
+  // Évaluation (aide à la décision, lot B)
+  const [evaluating, setEvaluating] = useState(false);
+  const [evaluation, setEvaluation] = useState<Evaluation | null>(null);
+  const [evalError, setEvalError] = useState<string | null>(null);
 
   // Restauration du brouillon au montage (avant d'autoriser l'écriture).
   useEffect(() => {
@@ -179,6 +229,14 @@ export default function Stepper() {
     setStep((s) => s + 1);
   };
 
+  // Normalise le formulaire pour l'API (résolution du bailleur « Autre »,
+  // nettoyage des objectifs vides). Partagé par génération et évaluation.
+  const normalizedForm = (): ProjectFormData => ({
+    ...form,
+    bailleur: form.bailleur === "Autre" ? bailleurCustom : form.bailleur,
+    objectifs_specifiques: form.objectifs_specifiques.filter((o) => o.trim()),
+  });
+
   const handleGenerate = async () => {
     setGenerating(true);
     setError(null);
@@ -187,9 +245,7 @@ export default function Stepper() {
     try {
       // Le endpoint renvoie directement le .docx (génération IA + mise en forme + persistance).
       const docxBlob = await generateDocument({
-        ...form,
-        bailleur: form.bailleur === "Autre" ? bailleurCustom : form.bailleur,
-        objectifs_specifiques: form.objectifs_specifiques.filter((o) => o.trim()),
+        ...normalizedForm(),
         reference_pdfs: allPdfs.length > 0 ? allPdfs.map((f) => f.b64) : undefined,
       });
       setBlob(docxBlob);
@@ -198,6 +254,20 @@ export default function Stepper() {
       setError(e instanceof Error ? e.message : "Erreur inconnue");
     } finally {
       setGenerating(false);
+    }
+  };
+
+  const handleEvaluate = async () => {
+    setEvaluating(true);
+    setEvalError(null);
+    setEvaluation(null);
+    try {
+      const result = await evaluateProject(normalizedForm());
+      setEvaluation(result);
+    } catch (e: unknown) {
+      setEvalError(e instanceof Error ? e.message : "Erreur inconnue");
+    } finally {
+      setEvaluating(false);
     }
   };
 
@@ -693,6 +763,110 @@ export default function Stepper() {
                   Ajouter une section pérennisation du projet
                 </span>
               </label>
+            </div>
+
+            {/* Évaluation IA — aide à la décision (lot B) */}
+            <div className="mt-8 pt-6 border-t border-gray-200">
+              <div className="flex items-center justify-between gap-4 flex-wrap">
+                <div>
+                  <h3 className="font-playfair text-lg text-bleu-marine font-bold">
+                    Évaluer avant de générer
+                  </h3>
+                  <p className="font-source text-sm text-gray-600">
+                    Analyse du bailleur ciblé et note prévisionnelle du dossier, sans consommer de génération.
+                  </p>
+                </div>
+                <button
+                  onClick={handleEvaluate}
+                  disabled={evaluating}
+                  className="btn-secondary whitespace-nowrap disabled:opacity-50 disabled:cursor-default"
+                >
+                  {evaluating ? "Évaluation en cours…" : "◎ Évaluer la compatibilité"}
+                </button>
+              </div>
+
+              {evalError && (
+                <p className="mt-4 text-sm text-red-600 font-source">{evalError}</p>
+              )}
+
+              {evaluation && (
+                <div className="mt-6 space-y-6">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <ScoreCard
+                      label={`Compatibilité ${evaluation.analyse_bailleur.nom || "bailleur"}`}
+                      value={evaluation.analyse_bailleur.score_compatibilite}
+                      suffix="%"
+                    />
+                    <ScoreCard
+                      label="Note globale du dossier"
+                      value={evaluation.notation.score_total_sur_100}
+                      suffix="/100"
+                    />
+                  </div>
+
+                  {evaluation.notation.recommandation && (
+                    <div className="rounded-xl bg-gris-clair/60 border border-gray-200 p-4">
+                      <p className="font-source text-sm font-semibold text-bleu-marine mb-1">Recommandation</p>
+                      <p className="font-source text-sm text-gray-700">{evaluation.notation.recommandation}</p>
+                    </div>
+                  )}
+
+                  {/* Notation détaillée par critère */}
+                  {evaluation.notation.criteres.length > 0 && (
+                    <div>
+                      <p className="font-source text-sm font-semibold text-bleu-marine mb-2">Notation par critère</p>
+                      <div className="space-y-2">
+                        {evaluation.notation.criteres.map((c, i) => {
+                          const pct = Math.max(0, Math.min(100, (c.note_sur_20 / 20) * 100));
+                          return (
+                            <div key={i}>
+                              <div className="flex justify-between text-sm font-source">
+                                <span className="text-gray-700" title={c.commentaire}>{c.critere}</span>
+                                <span className={`font-semibold ${scoreColor(pct)}`}>{c.note_sur_20}/20</span>
+                              </div>
+                              <div className="h-1.5 rounded-full bg-gray-100 overflow-hidden">
+                                <div className={`h-full ${scoreBar(pct)}`} style={{ width: `${pct}%` }} />
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+                    <EvalList title="Points forts" items={evaluation.notation.points_forts} tone="good" />
+                    <EvalList title="Axes d'amélioration" items={evaluation.notation.axes_amelioration} tone="warn" />
+                  </div>
+
+                  {/* Analyse du bailleur */}
+                  <div className="rounded-xl border border-gray-200 p-4 space-y-4">
+                    <p className="font-playfair text-base font-bold text-bleu-marine">
+                      Analyse du bailleur — {evaluation.analyse_bailleur.nom}
+                    </p>
+                    {(evaluation.analyse_bailleur.montant_max_finançable ||
+                      evaluation.analyse_bailleur.taux_cofinancement) && (
+                      <div className="flex flex-wrap gap-x-8 gap-y-1 text-sm font-source text-gray-700">
+                        {evaluation.analyse_bailleur.montant_max_finançable && (
+                          <span><strong className="text-bleu-marine">Montant :</strong> {evaluation.analyse_bailleur.montant_max_finançable}</span>
+                        )}
+                        {evaluation.analyse_bailleur.taux_cofinancement && (
+                          <span><strong className="text-bleu-marine">Cofinancement :</strong> {evaluation.analyse_bailleur.taux_cofinancement}</span>
+                        )}
+                      </div>
+                    )}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+                      <EvalList title="Priorités du bailleur" items={evaluation.analyse_bailleur.priorites} />
+                      <EvalList title="Critères d'éligibilité" items={evaluation.analyse_bailleur.criteres_eligibilite} />
+                    </div>
+                    <EvalList title="Risques de rejet" items={evaluation.analyse_bailleur.risques_rejet} tone="warn" />
+                  </div>
+
+                  <p className="font-source text-xs text-gray-400 italic">
+                    Estimation générée par IA à titre indicatif — à confronter aux lignes directrices officielles du bailleur.
+                  </p>
+                </div>
+              )}
             </div>
           </div>
         )}
