@@ -31,9 +31,15 @@ async def generate_document(
     project_dict = project.model_dump()
     reference_pdfs = project_dict.pop("reference_pdfs", None) or []
 
+    # En demande de financement, la durabilité/pérennisation est un attendu du bailleur :
+    # on force la section, quel que soit le flag coché par l'utilisateur.
+    if project_dict.get("type_dossier") == "financement":
+        project_dict["inclure_perennisation"] = True
+
     logger.info(
-        "Génération démarrée — user=%d projet=%r pays=%r secteur=%r bailleur=%r pdfs=%d",
-        current_user.id, project.nom, project_dict.get("pays"), project_dict.get("secteur"),
+        "Génération démarrée — user=%d projet=%r type=%s pays=%r secteur=%r bailleur=%r pdfs=%d",
+        current_user.id, project.nom, project_dict.get("type_dossier"),
+        project_dict.get("pays"), project_dict.get("secteur"),
         project_dict.get("bailleur"), len(reference_pdfs),
     )
 

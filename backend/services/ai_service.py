@@ -50,7 +50,11 @@ def _system_prompt() -> str:
 def _build_user_prompt(project_data: dict, has_references: bool) -> str:
     template = prompts.load("user_generate")
     reference_note = "\n" + prompts.load("reference_note") + "\n" if has_references else ""
+    # Cadrage selon le mode choisi au départ (montage vs demande de financement).
+    mode = (project_data.get("type_dossier") or "montage").strip().lower()
+    mode_note = prompts.load("mode_financement" if mode == "financement" else "mode_montage")
     return template.format(
+        mode_note=mode_note,
         project_data_json=json.dumps(project_data, ensure_ascii=False, indent=2),
         reference_note=reference_note,
     )

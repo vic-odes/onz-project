@@ -1,5 +1,6 @@
 Génère un document complet de projet de développement international basé sur ces informations :
 
+{mode_note}
 {project_data_json}
 {reference_note}
 Réponds avec un objet JSON contenant exactement ces clés :

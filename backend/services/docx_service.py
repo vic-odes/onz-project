@@ -196,6 +196,20 @@ def create_word_document(project_data: dict, generated: dict) -> bytes:
     run.font.color.rgb = BLEU_MARINE
     run.bold = True
 
+    # Type de dossier (montage vs demande de financement)
+    dossier_label = (
+        "Dossier de demande de financement"
+        if project_data.get("type_dossier") == "financement"
+        else "Dossier de montage de projet"
+    )
+    p = doc.add_paragraph()
+    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    run = p.add_run(dossier_label)
+    run.font.name = "Calibri"
+    run.font.size = Pt(13)
+    run.font.color.rgb = VERT_SAUGE
+    run.italic = True
+
     doc.add_paragraph()
 
     infos = [

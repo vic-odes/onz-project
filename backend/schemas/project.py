@@ -1,11 +1,14 @@
 from pydantic import BaseModel, Field, field_validator
-from typing import Optional, List
+from typing import Optional, List, Literal
 from datetime import datetime
 
 from services.pdf_validation import validate_reference_pdfs, PdfValidationError
 
 
 class ProjectCreate(BaseModel):
+    # Mode choisi au départ : « montage » (planification interne) ou « financement »
+    # (demande de subvention adressée au bailleur). Pilote le cadrage du document.
+    type_dossier: Literal["montage", "financement"] = "montage"
     nom: str = Field(..., min_length=1)
     pays: str = Field(..., min_length=1)
     secteur: str = Field(..., min_length=1)

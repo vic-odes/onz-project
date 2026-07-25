@@ -3,6 +3,7 @@ import { AuthUser, clearStoredUser } from "./auth";
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
 export interface ProjectFormData {
+  type_dossier: "montage" | "financement";
   nom: string;
   pays: string;
   secteur: string;

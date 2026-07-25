@@ -16,6 +16,7 @@ interface FormDraft {
 }
 
 const defaultForm: ProjectFormData = {
+  type_dossier: "montage",
   nom: "",
   pays: "",
   secteur: "",
@@ -404,6 +405,38 @@ export default function Stepper() {
         {/* ÉTAPE 1 */}
         {step === 0 && (
           <div className="flex flex-col gap-5">
+            {/* Choix du type de dossier — pilote le cadrage du document généré */}
+            <div>
+              <p className="label mb-2">Type de dossier *</p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {([
+                  { value: "montage", titre: "Montage de projet", desc: "Document de planification interne, complet et rigoureux." },
+                  { value: "financement", titre: "Demande de financement", desc: "Demande de subvention adressée au bailleur, ton persuasif." },
+                ] as const).map((opt) => {
+                  const active = form.type_dossier === opt.value;
+                  return (
+                    <button
+                      key={opt.value}
+                      type="button"
+                      onClick={() => set("type_dossier", opt.value)}
+                      aria-pressed={active}
+                      className={`text-left rounded-xl border p-4 transition-colors ${
+                        active
+                          ? "border-bleu-marine bg-bleu-marine/5 ring-1 ring-bleu-marine"
+                          : "border-gray-200 hover:border-bleu-marine/40"
+                      }`}
+                    >
+                      <span className="flex items-center gap-2 font-source font-semibold text-bleu-marine">
+                        <span className={`inline-block w-3 h-3 rounded-full border ${active ? "bg-bleu-marine border-bleu-marine" : "border-gray-300"}`} />
+                        {opt.titre}
+                      </span>
+                      <span className="block font-source text-xs text-gray-500 mt-1">{opt.desc}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
             {/* Pré-remplissage depuis un PDF */}
             <div className="border border-dashed border-bleu-marine/30 rounded-lg p-4 bg-bleu-marine/5">
               <p className="label mb-2">Pré-remplir depuis un PDF existant <span className="font-normal text-gray-400">(optionnel)</span></p>
@@ -690,6 +723,7 @@ export default function Stepper() {
                 Récapitulatif du projet
               </h3>
               {[
+                ["Type de dossier", form.type_dossier === "financement" ? "Demande de financement" : "Montage de projet"],
                 ["Nom", form.nom],
                 ["Pays", form.pays],
                 ["Secteur", form.secteur],
