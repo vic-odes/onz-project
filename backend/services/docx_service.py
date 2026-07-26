@@ -608,3 +608,109 @@ def create_word_document(project_data: dict, generated: dict) -> bytes:
     doc.save(buf)
     buf.seek(0)
     return buf.read()
+
+
+def create_note_conceptuelle_document(project_data: dict, note: dict) -> bytes:
+    """Rend une note conceptuelle autonome (concept note, 2-4 pages) en .docx.
+
+    Document court et orienté bailleur — pas de saut de page entre sections.
+    """
+    doc = Document()
+    section = doc.sections[0]
+    section.top_margin = Cm(2.5)
+    section.bottom_margin = Cm(2.5)
+    section.left_margin = Cm(3)
+    section.right_margin = Cm(2.5)
+
+    project_name = project_data.get("nom", "Projet")
+    _add_header_footer(doc, project_name)
+
+    # En-tête
+    p = doc.add_paragraph()
+    run = p.add_run("NOTE CONCEPTUELLE")
+    run.font.name = "Calibri"
+    run.font.size = Pt(12)
+    run.font.color.rgb = VERT_SAUGE
+    run.bold = True
+
+    titre = note.get("titre") or project_name
+    p = doc.add_paragraph()
+    run = p.add_run(titre)
+    run.font.name = "Calibri"
+    run.font.size = Pt(18)
+    run.font.color.rgb = BLEU_MARINE
+    run.bold = True
+
+    # Ligne d'infos
+    infos = " · ".join(
+        v for v in [
+            project_data.get("pays", ""),
+            project_data.get("secteur", ""),
+            f"Bailleur ciblé : {project_data.get('bailleur', '')}" if project_data.get("bailleur") else "",
+        ] if v
+    )
+    if infos:
+        p = doc.add_paragraph()
+        run = p.add_run(infos)
+        run.font.name = "Calibri"
+        run.font.size = Pt(10)
+        run.font.color.rgb = VERT_SAUGE
+
+    doc.add_paragraph()
+
+    # Résumé exécutif (mis en avant)
+    resume = note.get("resume_executif", "")
+    if resume and resume.strip():
+        _add_title(doc, "Résumé exécutif", 2)
+        _add_paragraph(doc, resume)
+
+    # Sections narratives simples
+    for title, key in [
+        ("Contexte", "contexte"),
+        ("Justification", "justification"),
+    ]:
+        val = note.get(key, "")
+        if val and val.strip():
+            _add_title(doc, title, 2)
+            _add_paragraph(doc, val)
+
+    # Objectifs
+    if (note.get("objectif_global") or "").strip():
+        _add_title(doc, "Objectif global", 2)
+        _add_paragraph(doc, note.get("objectif_global", ""))
+    if note.get("objectifs_specifiques"):
+        _add_title(doc, "Objectifs spécifiques", 2)
+        _add_bullets(doc, note.get("objectifs_specifiques", []))
+
+    if note.get("resultats_attendus"):
+        _add_title(doc, "Résultats attendus", 2)
+        _add_bullets(doc, note.get("resultats_attendus", []))
+
+    if note.get("activites_principales"):
+        _add_title(doc, "Activités principales", 2)
+        _add_bullets(doc, note.get("activites_principales", []))
+
+    if (note.get("beneficiaires") or "").strip():
+        _add_title(doc, "Bénéficiaires", 2)
+        _add_paragraph(doc, note.get("beneficiaires", ""))
+
+    if (note.get("budget_synthese") or "").strip():
+        _add_title(doc, "Budget et financement", 2)
+        _add_paragraph(doc, note.get("budget_synthese", ""))
+
+    if note.get("partenaires"):
+        _add_title(doc, "Partenaires", 2)
+        _add_bullets(doc, note.get("partenaires", []))
+
+    if (note.get("durabilite") or "").strip():
+        _add_title(doc, "Durabilité", 2)
+        _add_paragraph(doc, note.get("durabilite", ""))
+
+    if (note.get("conclusion") or "").strip():
+        _add_title(doc, "Conclusion", 2)
+        _add_paragraph(doc, note.get("conclusion", ""))
+
+    buf = io.BytesIO()
+    doc.save(buf)
+    buf.seek(0)
+    return buf.read()

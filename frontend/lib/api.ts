@@ -256,6 +256,22 @@ export async function downloadProject(id: number): Promise<Blob> {
   return response.blob();
 }
 
+export async function generateNoteConceptuelle(data: ProjectFormData): Promise<Blob> {
+  const { reference_pdfs: _ignored, ...payload } = data;
+  const response = await apiFetch("/api/generate/note-conceptuelle", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    throw new ApiError(
+      await readErrorMessage(response, "Erreur lors de la génération de la note conceptuelle."),
+      response.status,
+    );
+  }
+  return response.blob();
+}
+
 export async function downloadBudgetExcel(id: number): Promise<Blob> {
   const response = await apiFetch(`/api/projects/${id}/budget.xlsx`);
   if (!response.ok) {

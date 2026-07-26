@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
-import { evaluateProject, Evaluation, generateDocument, prefillFromPdf, ProjectFormData } from "@/lib/api";
+import { evaluateProject, Evaluation, generateDocument, generateNoteConceptuelle, prefillFromPdf, ProjectFormData } from "@/lib/api";
 import { BAILLEURS, SECTEURS, STEP_LABELS } from "@/lib/constants";
 import GenerationLoader from "./GenerationLoader";
 import PdfUpload from "./PdfUpload";
@@ -107,6 +107,9 @@ export default function Stepper() {
   const [evaluating, setEvaluating] = useState(false);
   const [evaluation, setEvaluation] = useState<Evaluation | null>(null);
   const [evalError, setEvalError] = useState<string | null>(null);
+  // Note conceptuelle (livrable complémentaire, lot B)
+  const [noteLoading, setNoteLoading] = useState(false);
+  const [noteError, setNoteError] = useState<string | null>(null);
 
   // Restauration du brouillon au montage (avant d'autoriser l'écriture).
   useEffect(() => {
@@ -269,6 +272,26 @@ export default function Stepper() {
       setEvalError(e instanceof Error ? e.message : "Erreur inconnue");
     } finally {
       setEvaluating(false);
+    }
+  };
+
+  const handleNoteConceptuelle = async () => {
+    setNoteLoading(true);
+    setNoteError(null);
+    try {
+      const blob = await generateNoteConceptuelle(normalizedForm());
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${form.nom.replace(/\s+/g, "_") || "projet"}_note_conceptuelle_ONZ.docx`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1500);
+    } catch (e: unknown) {
+      setNoteError(e instanceof Error ? e.message : "Erreur inconnue");
+    } finally {
+      setNoteLoading(false);
     }
   };
 
@@ -810,17 +833,29 @@ export default function Stepper() {
                     Analyse du bailleur ciblé et note prévisionnelle du dossier, sans consommer de génération.
                   </p>
                 </div>
-                <button
-                  onClick={handleEvaluate}
-                  disabled={evaluating}
-                  className="btn-secondary whitespace-nowrap disabled:opacity-50 disabled:cursor-default"
-                >
-                  {evaluating ? "Évaluation en cours…" : "◎ Évaluer la compatibilité"}
-                </button>
+                <div className="flex gap-2 flex-wrap">
+                  <button
+                    onClick={handleEvaluate}
+                    disabled={evaluating}
+                    className="btn-secondary whitespace-nowrap disabled:opacity-50 disabled:cursor-default"
+                  >
+                    {evaluating ? "Évaluation en cours…" : "◎ Évaluer la compatibilité"}
+                  </button>
+                  <button
+                    onClick={handleNoteConceptuelle}
+                    disabled={noteLoading}
+                    className="btn-secondary whitespace-nowrap disabled:opacity-50 disabled:cursor-default"
+                  >
+                    {noteLoading ? "Génération…" : "◫ Note conceptuelle"}
+                  </button>
+                </div>
               </div>
 
               {evalError && (
                 <p className="mt-4 text-sm text-red-600 font-source">{evalError}</p>
+              )}
+              {noteError && (
+                <p className="mt-2 text-sm text-red-600 font-source">{noteError}</p>
               )}
 
               {evaluation && (

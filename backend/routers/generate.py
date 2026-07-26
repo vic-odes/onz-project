@@ -11,6 +11,7 @@ from http_utils import content_disposition_attachment
 from dependencies import get_current_user
 from models.user import User
 from schemas.evaluation import Evaluation
+from schemas.note_conceptuelle import NoteConceptuelle
 from schemas.project import ProjectCreate
 from services import ai_service, docx_service, llm_client, prompts
 
@@ -20,6 +21,10 @@ router = APIRouter()
 # Évaluation : sortie compacte (analyse + notation), température basse pour la stabilité.
 _EVALUATION_MAX_TOKENS = 2500
 _EVALUATION_TEMPERATURE = 0.2
+
+# Note conceptuelle : document court (2-4 pages), un peu plus de tokens pour le narratif.
+_NOTE_MAX_TOKENS = 4000
+_NOTE_TEMPERATURE = 0.3
 
 
 @router.post("/")
@@ -145,3 +150,67 @@ async def evaluate_project(
         evaluation.notation.score_total_sur_100,
     )
     return evaluation
+
+
+@router.post("/note-conceptuelle")
+async def generate_note_conceptuelle(
+    project: ProjectCreate,
+    current_user: User = Depends(get_current_user),
+):
+    """Génère une note conceptuelle autonome (concept note, 2-4 pages) au format
+    bailleur et renvoie directement le .docx. Livrable à la demande, non persisté."""
+    project_dict = project.model_dump()
+    project_dict.pop("reference_pdfs", None)
+
+    logger.info(
+        "Note conceptuelle démarrée — user=%d projet=%r bailleur=%r",
+        current_user.id, project.nom, project_dict.get("bailleur"),
+    )
+
+    user_prompt = prompts.load("user_note_conceptuelle").format(
+        project_data_json=json.dumps(project_dict, ensure_ascii=False, indent=2),
+    )
+    messages = [
+        {"role": "system", "content": prompts.load("system_note_conceptuelle")},
+        {"role": "user", "content": user_prompt},
+    ]
+
+    try:
+        raw = await llm_client.call_llm(
+            messages,
+            max_tokens=_NOTE_MAX_TOKENS,
+            temperature=_NOTE_TEMPERATURE,
+        )
+        result = llm_client.parse_json_response(raw)
+    except json.JSONDecodeError as e:
+        logger.exception("Note conceptuelle — JSON invalide retourné par le modèle")
+        raise HTTPException(status_code=502, detail=f"Le modèle IA a retourné un JSON invalide : {str(e)}")
+    except Exception as e:
+        logger.exception("Erreur lors de la génération de la note conceptuelle")
+        raise HTTPException(status_code=500, detail=f"Erreur lors de la génération de la note conceptuelle : {str(e)}")
+
+    try:
+        note = NoteConceptuelle.model_validate(result)
+    except ValidationError as e:
+        missing = [".".join(str(p) for p in err["loc"]) for err in e.errors()]
+        logger.error("Note conceptuelle invalide — champs problématiques : %s", missing)
+        raise HTTPException(
+            status_code=502,
+            detail=(
+                "Le modèle IA a retourné une note conceptuelle incomplète "
+                f"(champ(s) problématique(s) : {', '.join(missing)}). Réessayez."
+            ),
+        )
+
+    try:
+        docx_bytes = docx_service.create_note_conceptuelle_document(project_dict, note.model_dump())
+    except Exception as e:
+        logger.exception("Erreur création docx note conceptuelle")
+        raise HTTPException(status_code=500, detail=f"Erreur lors de la création du document : {str(e)}")
+
+    filename = f"{(project.nom or 'Projet').strip()}_note_conceptuelle_ONZ.docx"
+    return StreamingResponse(
+        io.BytesIO(docx_bytes),
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={"Content-Disposition": content_disposition_attachment(filename)},
+    )
