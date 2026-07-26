@@ -3,6 +3,7 @@ import { AuthUser, clearStoredUser } from "./auth";
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
 export interface ProjectFormData {
+  type_dossier: "montage" | "financement";
   nom: string;
   pays: string;
   secteur: string;
@@ -21,6 +22,7 @@ export interface ProjectFormData {
   part_couts_operationnels: number;
   generer_note_conceptuelle: boolean;
   inclure_resume_executif: boolean;
+  inclure_perennisation: boolean;
   // PDFs de référence encodés en base64 (données seules, sans le préfixe data:)
   reference_pdfs?: string[];
 }
@@ -42,6 +44,36 @@ export interface ProjectSummary {
 export interface SessionResponse {
   expires_in: number;
   user: AuthUser;
+}
+
+// Évaluation d'un projet (analyse bailleur + notation) — POST /api/generate/evaluation
+export interface AnalyseBailleur {
+  nom: string;
+  priorites: string[];
+  criteres_eligibilite: string[];
+  montant_max_finançable: string;
+  taux_cofinancement: string;
+  score_compatibilite: number;
+  risques_rejet: string[];
+}
+
+export interface CritereNotation {
+  critere: string;
+  note_sur_20: number;
+  commentaire: string;
+}
+
+export interface Notation {
+  criteres: CritereNotation[];
+  score_total_sur_100: number;
+  points_forts: string[];
+  axes_amelioration: string[];
+  recommandation: string;
+}
+
+export interface Evaluation {
+  analyse_bailleur: AnalyseBailleur;
+  notation: Notation;
 }
 
 export class ApiError extends Error {
@@ -165,6 +197,23 @@ export async function generateDocument(data: ProjectFormData): Promise<Blob> {
   return response.blob();
 }
 
+export async function evaluateProject(data: ProjectFormData): Promise<Evaluation> {
+  // On n'envoie pas les PDFs de référence : l'évaluation porte sur le concept.
+  const { reference_pdfs: _ignored, ...payload } = data;
+  const response = await apiFetch("/api/generate/evaluation", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    throw new ApiError(
+      await readErrorMessage(response, "Erreur lors de l'évaluation du projet."),
+      response.status,
+    );
+  }
+  return response.json();
+}
+
 export async function listProjects(): Promise<ProjectSummary[]> {
   const response = await apiFetch("/api/projects/");
   if (!response.ok) {
@@ -201,6 +250,33 @@ export async function downloadProject(id: number): Promise<Blob> {
   if (!response.ok) {
     throw new ApiError(
       await readErrorMessage(response, "Document non disponible."),
+      response.status,
+    );
+  }
+  return response.blob();
+}
+
+export async function generateNoteConceptuelle(data: ProjectFormData): Promise<Blob> {
+  const { reference_pdfs: _ignored, ...payload } = data;
+  const response = await apiFetch("/api/generate/note-conceptuelle", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    throw new ApiError(
+      await readErrorMessage(response, "Erreur lors de la génération de la note conceptuelle."),
+      response.status,
+    );
+  }
+  return response.blob();
+}
+
+export async function downloadBudgetExcel(id: number): Promise<Blob> {
+  const response = await apiFetch(`/api/projects/${id}/budget.xlsx`);
+  if (!response.ok) {
+    throw new ApiError(
+      await readErrorMessage(response, "Budget Excel non disponible."),
       response.status,
     );
   }

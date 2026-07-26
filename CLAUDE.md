@@ -187,7 +187,7 @@ Conséquence : modifier `LLM_MODEL` ou `LLM_MAX_TOKENS` dans `.env` puis recharg
 ### Format JSON attendu du LLM (validé)
 Strictement défini dans [`_build_user_prompt`](backend/services/ai_service.py) ET validé par le schéma Pydantic [`schemas/generated.py`](backend/schemas/generated.py) :
 - **Top-level strict** : `introduction`, `cadre_logique`, `parties_prenantes`, `activites_detaillees`, `chronogramme`, `budget`, `analyse_cout_benefice`, `risques`, `communication` sont **obligatoires**. Toute clé manquante → `ValidationError` → HTTP **502**.
-- **Top-level optionnel** : `note_conceptuelle`, `resume_executif` (chaîne vide par défaut).
+- **Top-level optionnel** : `note_conceptuelle`, `resume_executif` (chaîne vide par défaut), et les sections du lot A `theorie_changement`, `arbre_problemes`, `plan_financement` (objets avec defaults), `perennisation` (chaîne vide, pilotée par le flag `inclure_perennisation`). Le prompt les demande, mais leur absence ne fait pas tomber la requête (même politique que `note_conceptuelle`).
 - **Nested permissif** : les sous-objets (`PartiePrenante`, `Risque`, `BudgetLigne`…) ont des defaults — un LLM qui omet `influence` mais fournit `nom` ne fait pas tomber la requête.
 - `extra="ignore"` partout : les champs supplémentaires hallucinés sont silencieusement ignorés.
 - `ai_service.generate_project_content` retourne `GeneratedContent.model_dump()` — `docx_service` reçoit donc une shape **garantie**, plus de section vide silencieuse due à une clé manquante.

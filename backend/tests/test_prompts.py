@@ -5,7 +5,10 @@ from services import prompts
 
 
 def test_loads_known_prompts():
-    for name in ("system_generate", "user_generate", "reference_note", "prefill"):
+    for name in (
+        "system_generate", "user_generate", "reference_note", "prefill",
+        "mode_montage", "mode_financement",
+    ):
         content = prompts.load(name)
         assert content, f"{name} ne doit pas être vide"
         assert isinstance(content, str)
@@ -16,6 +19,7 @@ def test_user_generate_has_format_placeholders():
     content = prompts.load("user_generate")
     assert "{project_data_json}" in content
     assert "{reference_note}" in content
+    assert "{mode_note}" in content
 
 
 def test_user_generate_renders_with_real_payload():
@@ -24,6 +28,7 @@ def test_user_generate_renders_with_real_payload():
     rendered = template.format(
         project_data_json='{"nom": "Test"}',
         reference_note="",
+        mode_note="",
     )
     assert '"nom": "Test"' in rendered
     assert '"introduction":' in rendered  # les {{ doivent devenir {
