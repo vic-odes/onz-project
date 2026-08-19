@@ -52,6 +52,10 @@ def save_project(project_data: dict, generated_content: dict, user_id: int, docx
             path.write_bytes(docx_bytes)
             project.docx_path = str(path)
             db.commit()
+            # `commit()` expire tous les attributs par défaut (`expire_on_commit=True`) —
+            # sans ce refresh, accéder à `project.id` après le retour de la fonction (donc
+            # après `db.close()` dans le `finally`) lève `DetachedInstanceError`.
+            db.refresh(project)
 
         return project
     finally:

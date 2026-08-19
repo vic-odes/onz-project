@@ -2,15 +2,18 @@ import io
 import json
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import ValidationError
+from sqlalchemy.orm import Session
 
-from database import save_project
+from database import SessionLocal, get_db, save_project
 from http_utils import content_disposition_attachment
 from dependencies import get_current_user
+from models.generation import GenerationJob
 from models.user import User
 from schemas.evaluation import Evaluation
+from schemas.generation_job import GenerationJobResponse
 from schemas.note_conceptuelle import NoteConceptuelle
 from schemas.project import ProjectCreate
 from services import ai_service, docx_service, llm_client, prompts
@@ -94,6 +97,127 @@ async def generate_document(
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         headers=headers,
     )
+
+
+async def _executer_generation_en_arriere_plan(
+    job_id: int, project_dict: dict, reference_pdfs: list, user_id: int
+) -> None:
+    """Exécute l'appel LLM + mise en forme DOCX + persistance en tâche de fond
+    (potentiellement long — PDFs natifs inclus) et met à jour la ligne à la
+    fin. Tourne après l'envoi de la réponse HTTP — utilise sa propre session
+    DB, indépendante de celle de la requête (déjà fermée à ce stade)."""
+    db = SessionLocal()
+    try:
+        job = db.query(GenerationJob).filter(GenerationJob.id == job_id).first()
+        if not job:
+            logger.error("Job de génération %d introuvable au moment de l'exécution en arrière-plan", job_id)
+            return
+
+        try:
+            generated = await ai_service.generate_project_content(project_dict, reference_pdfs or None)
+        except json.JSONDecodeError as e:
+            logger.exception("Génération %d — JSON invalide retourné par le modèle", job_id)
+            job.status = "erreur"
+            job.erreur = f"Le modèle IA a retourné un JSON invalide : {str(e)}"
+            db.commit()
+            return
+        except ValidationError as e:
+            missing = [".".join(str(p) for p in err["loc"]) for err in e.errors()]
+            logger.error("Génération %d — sortie LLM invalide — champs problématiques : %s", job_id, missing)
+            job.status = "erreur"
+            job.erreur = (
+                "Le modèle IA a retourné une réponse incomplète "
+                f"(champ(s) problématique(s) : {', '.join(missing)}). Réessayez."
+            )
+            db.commit()
+            return
+        except Exception as e:
+            logger.exception("Génération %d — erreur lors de la génération IA", job_id)
+            job.status = "erreur"
+            job.erreur = f"Erreur lors de la génération IA : {str(e)}"
+            db.commit()
+            return
+
+        try:
+            docx_bytes = docx_service.create_word_document(project_dict, generated)
+        except Exception as e:
+            logger.exception("Génération %d — erreur lors de la création du document Word", job_id)
+            job.status = "erreur"
+            job.erreur = f"Erreur lors de la création du document Word : {str(e)}"
+            db.commit()
+            return
+
+        try:
+            saved = save_project(project_dict, generated, user_id, docx_bytes)
+            saved_id = saved.id
+        except Exception as e:
+            logger.exception("Génération %d — erreur sauvegarde SQLite", job_id)
+            job.status = "erreur"
+            job.erreur = f"Erreur lors de la sauvegarde du projet : {str(e)}"
+            db.commit()
+            return
+
+        job.project_id = saved_id
+        job.status = "termine"
+        db.commit()
+        logger.info("Génération %d terminée — projet %d créé", job_id, saved_id)
+    finally:
+        db.close()
+
+
+@router.post("/demarrer", response_model=GenerationJobResponse)
+def demarrer_generation(
+    project: ProjectCreate,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Démarre la génération du document en arrière-plan et renvoie
+    immédiatement un identifiant de suivi. Évite qu'une requête bloquante de
+    plusieurs dizaines de secondes (voire minutes avec PDFs natifs) ne soit
+    coupée par le navigateur ou un proxy (ex. timeout d'ingress, mise en veille
+    de l'appareil). Le frontend sonde `GET /api/generate/etat/{id}`, puis
+    télécharge via `GET /api/projects/{project_id}/download` une fois
+    `status == "termine"`."""
+    project_dict = project.model_dump()
+    reference_pdfs = project_dict.pop("reference_pdfs", None) or []
+
+    if project_dict.get("type_dossier") == "financement":
+        project_dict["inclure_perennisation"] = True
+
+    logger.info(
+        "Génération démarrée (arrière-plan) — user=%d projet=%r type=%s pays=%r secteur=%r bailleur=%r pdfs=%d",
+        current_user.id, project.nom, project_dict.get("type_dossier"),
+        project_dict.get("pays"), project_dict.get("secteur"),
+        project_dict.get("bailleur"), len(reference_pdfs),
+    )
+
+    job = GenerationJob(user_id=current_user.id, status="en_cours")
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+
+    background_tasks.add_task(
+        _executer_generation_en_arriere_plan, job.id, project_dict, reference_pdfs, current_user.id
+    )
+    return job
+
+
+@router.get("/etat/{job_id}", response_model=GenerationJobResponse)
+def etat_generation(
+    job_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """À sonder par le frontend tant que `status == "en_cours"`."""
+    job = (
+        db.query(GenerationJob)
+        .filter(GenerationJob.id == job_id, GenerationJob.user_id == current_user.id)
+        .first()
+    )
+    if not job:
+        raise HTTPException(status_code=404, detail="Génération non trouvée")
+    return job
 
 
 @router.post("/evaluation", response_model=Evaluation)
