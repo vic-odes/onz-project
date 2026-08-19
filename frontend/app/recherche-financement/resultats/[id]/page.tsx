@@ -1,27 +1,76 @@
 "use client";
 import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { getRechercheFinancement, RechercheFinancementResponse, UnauthorizedError } from "@/lib/api";
+import {
+  getRechercheFinancement,
+  rechercherFinancement,
+  RechercheFinancementResponse,
+  UnauthorizedError,
+} from "@/lib/api";
 import { FINANCEMENT_CATEGORIE_ORDER, FINANCEMENT_CATEGORIES } from "@/lib/constants";
 import AuthGuard from "@/components/AuthGuard";
 import OpportuniteCard from "@/components/OpportuniteCard";
+import FinancementLoader from "@/components/FinancementLoader";
+
+// La recherche s'exécute en arrière-plan côté serveur (l'appel LLM — recherche
+// web incluse — peut prendre plusieurs minutes, trop long pour une requête
+// bloquante). On sonde le statut à intervalle régulier jusqu'à ce qu'il change.
+const POLL_INTERVAL_MS = 4000;
 
 function ResultatsContent({ rechercheId }: { rechercheId: number }) {
+  const router = useRouter();
   const [recherche, setRecherche] = useState<RechercheFinancementResponse | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [retrying, setRetrying] = useState(false);
 
   useEffect(() => {
-    getRechercheFinancement(rechercheId)
-      .then(setRecherche)
-      .catch((err) => {
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    const poll = async () => {
+      try {
+        const data = await getRechercheFinancement(rechercheId);
+        if (cancelled) return;
+        setRecherche(data);
+        if (data.status === "en_cours") {
+          timer = setTimeout(poll, POLL_INTERVAL_MS);
+        }
+      } catch (err) {
+        if (cancelled) return;
         if (err instanceof UnauthorizedError) return;
-        setError(err instanceof Error ? err.message : "Résultats introuvables.");
-      })
-      .finally(() => setLoading(false));
+        setLoadError(err instanceof Error ? err.message : "Résultats introuvables.");
+      }
+    };
+
+    poll();
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
   }, [rechercheId]);
 
-  if (loading) {
+  const handleRetry = async () => {
+    if (!recherche) return;
+    setRetrying(true);
+    try {
+      const nouvelle = await rechercherFinancement(recherche.project_id);
+      router.replace(`/recherche-financement/resultats/${nouvelle.id}`);
+    } catch (err) {
+      setLoadError(err instanceof Error ? err.message : "Erreur lors du nouvel essai.");
+      setRetrying(false);
+    }
+  };
+
+  if (loadError) {
+    return (
+      <div className="card max-w-lg mx-auto mt-10 text-center py-12 border-red-200">
+        <p className="text-red-500 font-source font-semibold">{loadError}</p>
+      </div>
+    );
+  }
+
+  if (!recherche) {
     return (
       <div className="flex justify-center py-32">
         <div className="w-10 h-10 rounded-full border-4 border-gray-200 border-t-bleu-marine animate-spin" />
@@ -29,10 +78,24 @@ function ResultatsContent({ rechercheId }: { rechercheId: number }) {
     );
   }
 
-  if (error || !recherche) {
+  if (recherche.status === "en_cours") {
+    return (
+      <div className="card max-w-2xl mx-auto mt-10">
+        <FinancementLoader />
+      </div>
+    );
+  }
+
+  if (recherche.status === "erreur") {
     return (
       <div className="card max-w-lg mx-auto mt-10 text-center py-12 border-red-200">
-        <p className="text-red-500 font-source font-semibold">{error || "Résultats introuvables."}</p>
+        <p className="font-playfair text-xl text-red-600 mb-2">Erreur de recherche</p>
+        <p className="font-source text-gray-600 mb-6">
+          {recherche.erreur || "La recherche de financement a échoué."}
+        </p>
+        <button type="button" onClick={handleRetry} disabled={retrying} className="btn-primary disabled:opacity-50">
+          {retrying ? "Relance…" : "↺ Réessayer"}
+        </button>
       </div>
     );
   }
