@@ -46,6 +46,36 @@ def test_supports_web_search(model, expected):
     assert llm_client.supports_web_search(model) is expected
 
 
+def test_azure_extras_empty_for_claude_even_if_azure_vars_set(monkeypatch):
+    """Des variables AZURE_API_* laissées en place (ex. ancienne config Azure
+    OpenAI) ne doivent jamais s'appliquer à un modèle Claude — sinon elles
+    écraseraient silencieusement ANTHROPIC_API_KEY/ANTHROPIC_API_BASE."""
+    monkeypatch.setenv("AZURE_API_KEY", "azure-openai-key")
+    monkeypatch.setenv("AZURE_API_BASE", "https://example.openai.azure.com")
+    monkeypatch.setenv("AZURE_API_VERSION", "2024-08-01-preview")
+    assert llm_client.azure_extras("azure/claude-haiku-4-5") == {}
+    assert llm_client.azure_extras("anthropic/claude-haiku-4-5") == {}
+    assert llm_client.azure_extras("claude-haiku-4-5") == {}
+
+
+def test_azure_extras_applies_for_non_claude_model(monkeypatch):
+    monkeypatch.setenv("AZURE_API_KEY", "azure-openai-key")
+    monkeypatch.setenv("AZURE_API_BASE", "https://example.openai.azure.com")
+    monkeypatch.setenv("AZURE_API_VERSION", "2024-08-01-preview")
+    assert llm_client.azure_extras("azure/gpt-5.4-nano") == {
+        "api_key": "azure-openai-key",
+        "api_base": "https://example.openai.azure.com",
+        "api_version": "2024-08-01-preview",
+    }
+
+
+def test_azure_extras_empty_when_nothing_set(monkeypatch):
+    monkeypatch.delenv("AZURE_API_KEY", raising=False)
+    monkeypatch.delenv("AZURE_API_BASE", raising=False)
+    monkeypatch.delenv("AZURE_API_VERSION", raising=False)
+    assert llm_client.azure_extras("gpt-4o") == {}
+
+
 @pytest.mark.asyncio
 async def test_call_llm_passes_web_search_options(monkeypatch):
     captured = {}

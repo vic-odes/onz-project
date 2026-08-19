@@ -62,11 +62,14 @@ param llmModel string = 'claude-sonnet-4-20250514'
 ])
 param llmApiKeyEnvVar string = 'ANTHROPIC_API_KEY'
 
-@description('Endpoint Azure OpenAI (uniquement pour le fournisseur Azure). Vide sinon.')
+@description('Endpoint Azure OpenAI (uniquement pour le fournisseur Azure OpenAI). Vide sinon.')
 param azureApiBase string = ''
 
-@description('Version d\'API Azure OpenAI (uniquement pour le fournisseur Azure). Vide sinon.')
+@description('Version d\'API Azure OpenAI (uniquement pour le fournisseur Azure OpenAI). Vide sinon.')
 param azureApiVersion string = '2024-02-01'
+
+@description('Endpoint Anthropic personnalisé (ex. Claude hébergé sur Azure AI Foundry — https://<resource>.services.ai.azure.com/anthropic, SANS le suffixe /v1/messages). Vide = API Anthropic directe.')
+param anthropicApiBase string = ''
 
 @description('Plafond de jetons de sortie par requête LLM. Le document complet dépasse facilement 8000 jetons.')
 param llmMaxTokens string = '16000'
@@ -94,6 +97,16 @@ var azureExtraEnv = empty(azureApiBase) ? [] : [
   {
     name: 'AZURE_API_VERSION'
     value: azureApiVersion
+  }
+]
+
+// Endpoint Anthropic personnalisé (Claude sur Azure AI Foundry) — ignoré par
+// llm_client.azure_extras() si un modèle Claude est actif, cf. commentaire
+// dans backend/services/llm_client.py.
+var anthropicExtraEnv = empty(anthropicApiBase) ? [] : [
+  {
+    name: 'ANTHROPIC_API_BASE'
+    value: anthropicApiBase
   }
 ]
 
@@ -196,7 +209,7 @@ resource backend 'Microsoft.App/containerApps@2024-03-01' = {
             cpu: json(backendCpu)
             memory: backendMemory
           }
-          env: concat(backendBaseEnv, azureExtraEnv)
+          env: concat(backendBaseEnv, azureExtraEnv, anthropicExtraEnv)
           volumeMounts: [
             {
               volumeName: 'data'

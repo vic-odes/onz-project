@@ -15,6 +15,13 @@ on:
 #   LLM_API_KEY_ENV_VAR   ex. ANTHROPIC_API_KEY
 #   AZURE_API_BASE        (optionnel, fournisseur Azure OpenAI)
 #   AZURE_API_VERSION     (optionnel, fournisseur Azure OpenAI)
+#   ANTHROPIC_API_BASE    (optionnel, Claude hébergé sur Azure AI Foundry —
+#                          ex. https://<resource>.services.ai.azure.com/anthropic,
+#                          SANS le suffixe /v1/messages. Utiliser avec
+#                          LLM_MODEL=anthropic/<modele> et
+#                          LLM_API_KEY_ENV_VAR=ANTHROPIC_API_KEY, la clé étant
+#                          celle de la ressource Azure AI Foundry, pas une clé
+#                          Anthropic sk-ant-...)
 #
 # Secrets de dépôt (Settings > Secrets) :
 #   AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID  (fédération OIDC)
@@ -37,6 +44,7 @@ env:
   JWT_SECRET_KEY: ${{ secrets.JWT_SECRET_KEY }}
   AZURE_API_BASE: ${{ vars.AZURE_API_BASE }}
   AZURE_API_VERSION: ${{ vars.AZURE_API_VERSION }}
+  ANTHROPIC_API_BASE: ${{ vars.ANTHROPIC_API_BASE }}
 
 jobs:
   deploy:
@@ -56,6 +64,7 @@ jobs:
             echo "LLM_API_KEY_ENV_VAR=$(trim "$LLM_API_KEY_ENV_VAR")"
             echo "AZURE_API_BASE=$(trim "$AZURE_API_BASE")"
             echo "AZURE_API_VERSION=$(trim "$AZURE_API_VERSION")"
+            echo "ANTHROPIC_API_BASE=$(trim "$ANTHROPIC_API_BASE")"
           } >> "$GITHUB_ENV"
 
       - name: Connexion Azure (OIDC)
@@ -137,6 +146,9 @@ jobs:
           extra=""
           if [ -n "$AZURE_API_BASE" ]; then
             extra="azureApiBase=$AZURE_API_BASE azureApiVersion=$AZURE_API_VERSION"
+          fi
+          if [ -n "$ANTHROPIC_API_BASE" ]; then
+            extra="$extra anthropicApiBase=$ANTHROPIC_API_BASE"
           fi
 
           outputs=$(az deployment group create \
