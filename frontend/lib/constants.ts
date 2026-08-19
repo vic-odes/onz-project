@@ -62,3 +62,37 @@ export const STEP_LABELS = [
   "Documents de référence",
   "Confirmation",
 ] as const;
+
+/**
+ * Valeur spéciale du champ `bailleur` : l'utilisateur ne connaît pas encore le
+ * bailleur et souhaite qu'une recherche de financement soit lancée après la
+ * génération du document (voir Stepper.tsx et /recherche-financement).
+ */
+export const RECHERCHE_BAILLEUR_LABEL = "Recherche automatique de bailleur";
+
+/** Libellés, couleurs et icônes des catégories de compatibilité (recherche de financement). */
+export const FINANCEMENT_CATEGORIES: Record<
+  string,
+  { label: string; icon: string; badgeClass: string }
+> = {
+  tres_compatible: { label: "Très forte compatibilité", icon: "🟢", badgeClass: "bg-green-100 text-green-700 border-green-300" },
+  compatible: { label: "Bonne compatibilité", icon: "🟢", badgeClass: "bg-green-50 text-green-700 border-green-200" },
+  a_etudier: { label: "À étudier", icon: "🟠", badgeClass: "bg-orange-100 text-orange-700 border-orange-300" },
+  faible: { label: "Faible compatibilité", icon: "🔴", badgeClass: "bg-red-100 text-red-700 border-red-300" },
+  non_eligible: { label: "Non éligible", icon: "⚫", badgeClass: "bg-gray-200 text-gray-600 border-gray-300" },
+};
+
+export const FINANCEMENT_CATEGORIE_ORDER = [
+  "tres_compatible",
+  "compatible",
+  "a_etudier",
+  "faible",
+  "non_eligible",
+] as const;
+
+/** Libellés de l'indicateur de fiabilité d'une opportunité de financement. */
+export const FIABILITE_LABELS: Record<string, string> = {
+  verifie: "✓ Source officielle vérifiée",
+  a_confirmer: "⚠ À confirmer auprès du bailleur",
+  information_non_disponible: "⚠ Estimation — recherche en direct indisponible",
+};

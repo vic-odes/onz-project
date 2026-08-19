@@ -40,6 +40,14 @@ def supports_native_pdf(model: Optional[str] = None) -> bool:
     return "claude" in (model or get_model()).lower()
 
 
+def supports_web_search(model: Optional[str] = None) -> bool:
+    """La recherche web côté serveur (`web_search_options`) n'est fiable que sur les
+    modèles Anthropic/Claude (litellm la traduit en outil natif `web_search_20250305`).
+    Pour les autres providers, mieux vaut ne pas l'activer plutôt que de laisser
+    `drop_params` la retirer silencieusement sans que l'appelant le sache."""
+    return "claude" in (model or get_model()).lower()
+
+
 def azure_extras() -> dict:
     """Kwargs Azure à passer à `litellm.acompletion`, vides si non configurés."""
     extras = {}
@@ -70,8 +78,16 @@ async def call_llm(
     temperature: float = 0.3,
     model: Optional[str] = None,
     extra: Optional[dict] = None,
+    web_search: bool = False,
 ) -> str:
     """Appelle le LLM via LiteLLM et retourne la réponse texte nettoyée.
+
+    `web_search=True` active l'outil serveur `web_search_options` (litellm le
+    traduit en outil natif Anthropic `web_search_20250305` pour Claude). Aucune
+    boucle côté client n'est nécessaire : la recherche s'exécute côté serveur et
+    le texte final revient directement dans `message.content`. À n'activer que
+    si `supports_web_search()` est vrai — pour les autres providers, le
+    paramètre serait de toute façon retiré silencieusement par `drop_params`.
 
     Lève :
     - `ValueError` si la réponse est vide, tronquée (`finish_reason="length"`),
@@ -82,10 +98,10 @@ async def call_llm(
     used_extra = extra if extra is not None else azure_extras()
 
     logger.debug(
-        "LLM call — model=%s max_tokens=%d temperature=%s messages=%d extra_keys=%s",
-        used_model, max_tokens, temperature, len(messages), list(used_extra.keys()),
+        "LLM call — model=%s max_tokens=%d temperature=%s messages=%d extra_keys=%s web_search=%s",
+        used_model, max_tokens, temperature, len(messages), list(used_extra.keys()), web_search,
     )
-    response = await litellm.acompletion(
+    call_kwargs: dict = dict(
         model=used_model,
         messages=messages,
         max_tokens=max_tokens,
@@ -96,6 +112,9 @@ async def call_llm(
         response_format={"type": "json_object"},
         **used_extra,
     )
+    if web_search:
+        call_kwargs["web_search_options"] = {"search_context_size": "medium"}
+    response = await litellm.acompletion(**call_kwargs)
     finish_reason = response.choices[0].finish_reason
     content = response.choices[0].message.content
     logger.debug(
@@ -160,6 +179,7 @@ def parse_json_response(raw: str) -> dict:
 __all__ = [
     "get_model",
     "supports_native_pdf",
+    "supports_web_search",
     "azure_extras",
     "call_llm",
     "strip_markdown_fences",

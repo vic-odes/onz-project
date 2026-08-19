@@ -1,0 +1,72 @@
+"""Schéma Pydantic pour la sortie LLM de recherche de financements.
+
+Même philosophie que `schemas/generated.py`/`schemas/evaluation.py` : nested permissif
+avec defaults (le LLM est variable sur la granularité), `extra="ignore"` pour tolérer les
+clés hallucinées. Contrairement à `GeneratedContent`, il n'y a pas de clé top-level
+« obligatoire » : une liste d'opportunités vide est un résultat valide (aucune opportunité
+crédible trouvée), pas une erreur.
+"""
+
+from typing import List, Literal, Optional
+from datetime import datetime
+
+from pydantic import BaseModel, ConfigDict, Field
+
+Categorie = Literal["tres_compatible", "compatible", "a_etudier", "faible", "non_eligible"]
+Fiabilite = Literal["verifie", "a_confirmer", "information_non_disponible"]
+
+
+class OpportuniteFinancement(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    bailleur: str = ""
+    programme: str = ""
+    nom_appel: str = ""
+    description: str = ""
+    categorie: Categorie = "a_etudier"
+    score_compatibilite: int = 0  # 0-100
+    montant_min: Optional[float] = None
+    montant_max: Optional[float] = None
+    devise: str = ""
+    taux_cofinancement_max: str = ""
+    date_limite: str = ""  # "JJ/MM/AAAA" ou "" si inconnue/permanent
+    depot_permanent: bool = False
+    raisons_compatibilite: List[str] = Field(default_factory=list)
+    points_vigilance: List[str] = Field(default_factory=list)
+    conditions_principales: List[str] = Field(default_factory=list)
+    source_officielle: str = ""
+    lien_candidature: str = ""
+    fiabilite: Fiabilite = "information_non_disponible"
+    date_verification: str = ""
+
+
+class ResultatsFinancement(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    resume: str = ""
+    opportunites: List[OpportuniteFinancement] = Field(default_factory=list)
+
+
+class RechercheFinancementResponse(BaseModel):
+    """Réponse de l'API pour une recherche persistée."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    project_id: int
+    project_nom: str
+    recherche_live: bool
+    created_at: datetime
+    resultats: ResultatsFinancement
+
+
+class RechercheFinancementSummary(BaseModel):
+    """Résumé léger pour lister les recherches passées d'un projet."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    recherche_live: bool
+    created_at: datetime
+    nb_opportunites: int
+    resume: str

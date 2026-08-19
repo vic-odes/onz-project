@@ -82,10 +82,15 @@ async def test_generate_happy_path(monkeypatch):
         lambda pd, gen: b"FAKE_DOCX_BYTES",
     )
     saved = {}
-    monkeypatch.setattr(
-        generate_router, "save_project",
-        lambda pd, gen, uid, docx: saved.update(uid=uid, docx=docx),
-    )
+
+    class _FakeSavedProject:
+        id = 42
+
+    def _fake_save_project(pd, gen, uid, docx):
+        saved.update(uid=uid, docx=docx)
+        return _FakeSavedProject()
+
+    monkeypatch.setattr(generate_router, "save_project", _fake_save_project)
 
     response = await generate_router.generate_document(_project(), current_user=_FakeUser())
 
@@ -96,6 +101,9 @@ async def test_generate_happy_path(monkeypatch):
     assert await _read_body(response) == b"FAKE_DOCX_BYTES"
     # La persistance reçoit bien l'id utilisateur et les octets du document
     assert saved["uid"] == 1 and saved["docx"] == b"FAKE_DOCX_BYTES"
+    # L'id du projet créé est exposé pour permettre au frontend d'enchaîner sur
+    # une recherche de financement.
+    assert response.headers["x-project-id"] == "42"
 
 
 @pytest.mark.asyncio

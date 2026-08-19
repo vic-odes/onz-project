@@ -2,6 +2,7 @@
 import { ProjectSummary, deleteProject, downloadProject, downloadBudgetExcel } from "@/lib/api";
 import { SECTOR_COLORS, SECTOR_ACCENT } from "@/lib/constants";
 import { useEffect, useRef, useState } from "react";
+import Link from "next/link";
 
 interface ProjectCardProps {
   project: ProjectSummary;
@@ -207,6 +208,14 @@ export default function ProjectCard({ project, onDelete }: ProjectCardProps) {
                   </button>
                 </>
               )}
+              <Link
+                href={`/recherche-financement/${project.id}`}
+                aria-label={`Rechercher des financements pour le projet ${project.nom}`}
+                className="inline-flex items-center gap-1 rounded-lg border border-gray-200 px-3 py-1.5 text-sm font-semibold text-gray-500
+                           transition-colors hover:border-vert-sauge hover:text-vert-sauge font-source"
+              >
+                🔎
+              </Link>
               <button
                 type="button"
                 onClick={askDelete}

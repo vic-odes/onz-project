@@ -21,6 +21,11 @@ const features = [
     title: "Export Word",
     desc: "Document .docx professionnel prêt à soumettre aux bailleurs.",
   },
+  {
+    icon: "🔎",
+    title: "Recherche de financement",
+    desc: "Identification automatique des bailleurs et appels à projets compatibles avec votre projet.",
+  },
 ];
 
 const bailleurs = ["AFD", "Union Européenne", "Banque Mondiale", "PNUD"];
@@ -55,6 +60,9 @@ export default function HomePage() {
           <div className="flex flex-col sm:flex-row gap-4 justify-center">
             <Link href="/nouveau-projet" className="btn-accent text-center">
               Créer un nouveau projet
+            </Link>
+            <Link href="/recherche-financement" className="btn-secondary text-center">
+              🔎 Rechercher un financement
             </Link>
             <Link href="/mes-projets" className="btn-secondary text-center">
               Mes projets sauvegardés

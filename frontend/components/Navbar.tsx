@@ -7,6 +7,7 @@ import { useAuth } from "@/contexts/AuthContext";
 const privateLinks = [
   { href: "/nouveau-projet", label: "Nouveau projet" },
   { href: "/mes-projets", label: "Mes projets" },
+  { href: "/recherche-financement", label: "Rechercher un financement" },
 ];
 
 export default function Navbar() {

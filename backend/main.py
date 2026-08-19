@@ -5,7 +5,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from slowapi.errors import RateLimitExceeded
 from slowapi import _rate_limit_exceeded_handler
-from routers import generate, projects, documents, auth
+from routers import generate, projects, documents, auth, financements
 from database import init_db
 from middleware import BodySizeLimitMiddleware
 from rate_limit import limiter
@@ -45,7 +45,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type"],
-    expose_headers=["Content-Disposition"],  # nécessaire au téléchargement du .docx côté navigateur
+    expose_headers=["Content-Disposition", "X-Project-Id"],  # docx + id du projet créé
     max_age=600,
 )
 app.add_middleware(BodySizeLimitMiddleware)
@@ -54,6 +54,7 @@ app.include_router(auth.router, prefix="/api/auth", tags=["Authentification"])
 app.include_router(generate.router, prefix="/api/generate", tags=["Génération"])
 app.include_router(projects.router, prefix="/api/projects", tags=["Projets"])
 app.include_router(documents.router, prefix="/api/documents", tags=["Documents"])
+app.include_router(financements.router, prefix="/api/financements", tags=["Financements"])
 
 
 @app.middleware("http")
