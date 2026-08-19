@@ -132,16 +132,23 @@ async def call_llm(
         finish_reason, len(content) if content else "None",
     )
 
+    # Vérifié avant le test de contenu vide : une troncature avec du contenu
+    # PARTIEL (le cas réel le plus fréquent) doit être détectée elle aussi —
+    # sinon le JSON tronqué part vers parse_json_response(), dont la
+    # réparation automatique peut le rendre syntaxiquement valide mais
+    # sémantiquement incomplet (sections manquantes en fin de document,
+    # silencieusement confondu avec un oubli du modèle).
+    if finish_reason == "length":
+        logger.error(
+            "Limite de tokens atteinte (max_tokens=%d) — réponse tronquée (%s caractères reçus).",
+            max_tokens, len(content) if content else 0,
+        )
+        raise ValueError(
+            f"Le modèle a atteint la limite de tokens ({max_tokens}) — réponse tronquée. "
+            "Réduisez les documents joints ou augmentez LLM_MAX_TOKENS."
+        )
+
     if not content:
-        if finish_reason == "length":
-            logger.error(
-                "Limite de tokens atteinte (max_tokens=%d) — réponse tronquée/vide.",
-                max_tokens,
-            )
-            raise ValueError(
-                f"Le modèle a atteint la limite de tokens ({max_tokens}). "
-                "Réduisez les documents joints ou augmentez LLM_MAX_TOKENS."
-            )
         logger.error("Le modèle a retourné un contenu vide (finish_reason=%s)", finish_reason)
         raise ValueError("Le modèle a retourné une réponse vide.")
 

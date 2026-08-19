@@ -13,6 +13,9 @@ on:
 #   NAME_PREFIX           ex. onz
 #   LLM_MODEL             ex. claude-sonnet-4-20250514
 #   LLM_API_KEY_ENV_VAR   ex. ANTHROPIC_API_KEY
+#   LLM_MAX_TOKENS        (optionnel, défaut 16000 — augmenter si le modèle
+#                          tronque ses réponses avant la fin du document,
+#                          ex. 24000)
 #   AZURE_API_BASE        (optionnel, fournisseur Azure OpenAI)
 #   AZURE_API_VERSION     (optionnel, fournisseur Azure OpenAI)
 #   ANTHROPIC_API_BASE    (optionnel, Claude hébergé sur Azure AI Foundry —
@@ -40,6 +43,7 @@ env:
   NAME_PREFIX: ${{ vars.NAME_PREFIX }}
   LLM_MODEL: ${{ vars.LLM_MODEL }}
   LLM_API_KEY_ENV_VAR: ${{ vars.LLM_API_KEY_ENV_VAR }}
+  LLM_MAX_TOKENS: ${{ vars.LLM_MAX_TOKENS }}
   LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
   JWT_SECRET_KEY: ${{ secrets.JWT_SECRET_KEY }}
   AZURE_API_BASE: ${{ vars.AZURE_API_BASE }}
@@ -62,6 +66,7 @@ jobs:
             echo "NAME_PREFIX=$(trim "$NAME_PREFIX")"
             echo "LLM_MODEL=$(trim "$LLM_MODEL")"
             echo "LLM_API_KEY_ENV_VAR=$(trim "$LLM_API_KEY_ENV_VAR")"
+            echo "LLM_MAX_TOKENS=$(trim "$LLM_MAX_TOKENS")"
             echo "AZURE_API_BASE=$(trim "$AZURE_API_BASE")"
             echo "AZURE_API_VERSION=$(trim "$AZURE_API_VERSION")"
             echo "ANTHROPIC_API_BASE=$(trim "$ANTHROPIC_API_BASE")"
@@ -149,6 +154,9 @@ jobs:
           fi
           if [ -n "$ANTHROPIC_API_BASE" ]; then
             extra="$extra anthropicApiBase=$ANTHROPIC_API_BASE"
+          fi
+          if [ -n "$LLM_MAX_TOKENS" ]; then
+            extra="$extra llmMaxTokens=$LLM_MAX_TOKENS"
           fi
 
           outputs=$(az deployment group create \

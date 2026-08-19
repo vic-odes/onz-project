@@ -77,6 +77,47 @@ def test_azure_extras_empty_when_nothing_set(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_call_llm_raises_on_truncation_with_partial_content(monkeypatch):
+    """Régression : une troncature (finish_reason="length") avec du contenu
+    PARTIEL (le cas réel le plus fréquent — le modèle a déjà écrit une grande
+    partie du JSON avant d'atteindre max_tokens) doit lever une erreur claire,
+    plutôt que laisser le JSON tronqué partir vers parse_json_response()."""
+    class _FakeChoice:
+        finish_reason = "length"
+        message = type("M", (), {"content": '{"introduction": "texte partiel...'})()
+
+    class _FakeResponse:
+        choices = [_FakeChoice()]
+
+    async def _fake_acompletion(**kwargs):
+        return _FakeResponse()
+
+    monkeypatch.setattr(llm_client.litellm, "acompletion", _fake_acompletion)
+
+    with pytest.raises(ValueError, match="limite de tokens"):
+        await llm_client.call_llm([{"role": "user", "content": "x"}], max_tokens=16000)
+
+
+@pytest.mark.asyncio
+async def test_call_llm_raises_on_truncation_with_empty_content(monkeypatch):
+    """Cas historique : troncature avec contenu totalement vide."""
+    class _FakeChoice:
+        finish_reason = "length"
+        message = type("M", (), {"content": ""})()
+
+    class _FakeResponse:
+        choices = [_FakeChoice()]
+
+    async def _fake_acompletion(**kwargs):
+        return _FakeResponse()
+
+    monkeypatch.setattr(llm_client.litellm, "acompletion", _fake_acompletion)
+
+    with pytest.raises(ValueError, match="limite de tokens"):
+        await llm_client.call_llm([{"role": "user", "content": "x"}], max_tokens=16000)
+
+
+@pytest.mark.asyncio
 async def test_call_llm_passes_web_search_options(monkeypatch):
     captured = {}
 
