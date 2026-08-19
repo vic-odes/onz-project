@@ -11,6 +11,8 @@ from models.financement import RechercheFinancement
 from models.project import Project
 from models.user import User
 from schemas.financement import (
+    RECHERCHE_BAILLEUR_LABEL,
+    ImporterProjetRequest,
     RechercheFinancementResponse,
     RechercheFinancementSummary,
     ResultatsFinancement,
@@ -54,15 +56,11 @@ def _to_response(recherche: RechercheFinancement, project_nom: str) -> Recherche
     )
 
 
-@router.post("/rechercher/{project_id}", response_model=RechercheFinancementResponse)
-async def rechercher_financement(
-    project_id: int,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    """Lance une recherche de financements pour un projet déjà monté et la persiste."""
-    project = _owned_project_or_404(db, project_id, current_user.id)
-
+async def _rechercher_et_persister(
+    db: Session, current_user: User, project: Project
+) -> RechercheFinancementResponse:
+    """Lance la recherche LLM pour `project`, persiste le résultat, et renvoie la
+    réponse API. Partagé par `/rechercher/{project_id}` et `/importer`."""
     project_data = {
         "nom": project.nom,
         "pays": project.pays,
@@ -101,6 +99,45 @@ async def rechercher_financement(
     db.refresh(recherche)
 
     return _to_response(recherche, project.nom)
+
+
+@router.post("/rechercher/{project_id}", response_model=RechercheFinancementResponse)
+async def rechercher_financement(
+    project_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Lance une recherche de financements pour un projet déjà monté et la persiste."""
+    project = _owned_project_or_404(db, project_id, current_user.id)
+    return await _rechercher_et_persister(db, current_user, project)
+
+
+@router.post("/importer", response_model=RechercheFinancementResponse)
+async def importer_et_rechercher(
+    payload: ImporterProjetRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Crée un projet minimal (sans document généré) à partir de champs extraits
+    d'un PDF externe — via /api/documents/prefill côté frontend — et lance
+    immédiatement une recherche de financement. Permet de rechercher un
+    financement pour un projet monté hors de l'application."""
+    project = Project(
+        user_id=current_user.id,
+        nom=payload.nom,
+        pays=payload.pays,
+        secteur=payload.secteur or "Non précisé",
+        bailleur=RECHERCHE_BAILLEUR_LABEL,
+        probleme_principal=payload.probleme_principal,
+        objectif_global=payload.objectif_global,
+        budget_total=payload.budget_total,
+        duree_mois=payload.duree_mois,
+    )
+    db.add(project)
+    db.commit()
+    db.refresh(project)
+
+    return await _rechercher_et_persister(db, current_user, project)
 
 
 @router.get("/{recherche_id}", response_model=RechercheFinancementResponse)

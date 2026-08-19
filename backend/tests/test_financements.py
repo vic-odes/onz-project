@@ -173,3 +173,48 @@ def test_rechercher_financement_llm_error_is_502(client, monkeypatch):
 
     r = client.post(f"/api/financements/rechercher/{project_id}")
     assert r.status_code == 502
+
+
+def test_importer_et_rechercher_happy_path(client, monkeypatch):
+    """Un projet monté hors de l'application (PDF importé) peut être recherché
+    sans passer par le Stepper — /importer crée un projet minimal (sans docx)."""
+    monkeypatch.setattr(financements_router.financement_service, "rechercher_financements", _fake_ok)
+    _register(client)
+
+    r = client.post("/api/financements/importer", json={
+        "nom": "Projet importé depuis PDF",
+        "pays": "Sénégal",
+        "secteur": "Agriculture",
+        "probleme_principal": "Faible rendement agricole",
+        "objectif_global": "Améliorer les rendements",
+        "budget_total": 300000,
+        "duree_mois": 24,
+    })
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["project_nom"] == "Projet importé depuis PDF"
+    assert body["resultats"]["opportunites"][0]["bailleur"] == "AFD"
+
+    # Le projet créé n'a pas de docx — il apparaît quand même dans /api/projects/
+    projects = client.get("/api/projects/").json()
+    imported = next(p for p in projects if p["nom"] == "Projet importé depuis PDF")
+    assert imported["bailleur"] == "Recherche automatique de bailleur"
+    assert imported["docx_path"] is None
+
+
+def test_importer_et_rechercher_defaults_secteur_when_missing(client, monkeypatch):
+    monkeypatch.setattr(financements_router.financement_service, "rechercher_financements", _fake_ok)
+    _register(client)
+
+    r = client.post("/api/financements/importer", json={"nom": "Projet minimal", "pays": "Mali"})
+    assert r.status_code == 200, r.text
+
+    projects = client.get("/api/projects/").json()
+    imported = next(p for p in projects if p["nom"] == "Projet minimal")
+    assert imported["secteur"] == "Non précisé"
+
+
+def test_importer_et_rechercher_requires_nom_and_pays(client):
+    _register(client)
+    r = client.post("/api/financements/importer", json={"nom": "", "pays": "Mali"})
+    assert r.status_code == 422

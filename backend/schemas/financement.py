@@ -15,6 +15,25 @@ from pydantic import BaseModel, ConfigDict, Field
 Categorie = Literal["tres_compatible", "compatible", "a_etudier", "faible", "non_eligible"]
 Fiabilite = Literal["verifie", "a_confirmer", "information_non_disponible"]
 
+# Valeur du champ `bailleur` posée quand aucun bailleur précis n'est visé — doit
+# rester identique à `RECHERCHE_BAILLEUR_LABEL` dans frontend/lib/constants.ts.
+RECHERCHE_BAILLEUR_LABEL = "Recherche automatique de bailleur"
+
+
+class ImporterProjetRequest(BaseModel):
+    """Champs extraits d'un PDF externe (via /api/documents/prefill) pour créer
+    un projet minimal — sans document généré — et lancer une recherche de
+    financement. Permet de rechercher un financement pour un projet monté hors
+    de l'application."""
+
+    nom: str = Field(..., min_length=1)
+    pays: str = Field(..., min_length=1)
+    secteur: str = ""
+    probleme_principal: str = ""
+    objectif_global: str = ""
+    budget_total: Optional[float] = None
+    duree_mois: Optional[int] = None
+
 
 class OpportuniteFinancement(BaseModel):
     model_config = ConfigDict(extra="ignore")

@@ -124,6 +124,17 @@ export interface RechercheFinancementSummary {
   resume: string;
 }
 
+// Import d'un projet monté hors de l'application (PDF) — POST /api/financements/importer
+export interface ImporterProjetPayload {
+  nom: string;
+  pays: string;
+  secteur?: string;
+  probleme_principal?: string;
+  objectif_global?: string;
+  budget_total?: number | null;
+  duree_mois?: number | null;
+}
+
 export class ApiError extends Error {
   status: number;
   constructor(message: string, status: number) {
@@ -373,6 +384,25 @@ export async function listRecherchesPourProjet(projectId: number): Promise<Reche
   if (!response.ok) {
     throw new ApiError(
       await readErrorMessage(response, "Impossible de charger l'historique des recherches."),
+      response.status,
+    );
+  }
+  return response.json();
+}
+
+// Crée un projet minimal (sans document généré) à partir de champs extraits d'un
+// PDF externe et lance immédiatement la recherche de financement.
+export async function importerProjetEtRechercher(
+  payload: ImporterProjetPayload,
+): Promise<RechercheFinancementResponse> {
+  const response = await apiFetch("/api/financements/importer", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    throw new ApiError(
+      await readErrorMessage(response, "Erreur lors de l'import du projet."),
       response.status,
     );
   }
