@@ -484,14 +484,20 @@ export default function Stepper() {
                   { value: "financement", titre: "Demande de financement", desc: "Demande de subvention adressée au bailleur, ton persuasif." },
                 ] as const).map((opt) => {
                   const active = form.type_dossier === opt.value;
+                  // Une « demande de financement » s'adresse à un bailleur précis — incompatible
+                  // avec la recherche automatique de bailleur (pas encore de destinataire connu).
+                  const disabled = opt.value === "financement" && form.bailleur === RECHERCHE_BAILLEUR_LABEL;
                   return (
                     <button
                       key={opt.value}
                       type="button"
-                      onClick={() => set("type_dossier", opt.value)}
+                      disabled={disabled}
+                      onClick={() => !disabled && set("type_dossier", opt.value)}
                       aria-pressed={active}
                       className={`text-left rounded-xl border p-4 transition-colors ${
-                        active
+                        disabled
+                          ? "border-gray-200 opacity-50 cursor-not-allowed"
+                          : active
                           ? "border-bleu-marine bg-bleu-marine/5 ring-1 ring-bleu-marine"
                           : "border-gray-200 hover:border-bleu-marine/40"
                       }`}
@@ -505,6 +511,12 @@ export default function Stepper() {
                   );
                 })}
               </div>
+              {form.bailleur === RECHERCHE_BAILLEUR_LABEL && (
+                <p className="font-source text-xs text-gray-500 mt-2 italic">
+                  Indisponible avec la recherche automatique de bailleur — le document ne peut pas
+                  s&apos;adresser à un bailleur qui n&apos;est pas encore identifié.
+                </p>
+              )}
             </div>
 
             {/* Pré-remplissage depuis un PDF */}
@@ -572,6 +584,11 @@ export default function Stepper() {
                   // L'évaluation cible un bailleur précis — invalide dès que le bailleur change.
                   setEvaluation(null);
                   setEvalError(null);
+                  // « Demande de financement » s'adresse à un bailleur précis — incompatible
+                  // avec la recherche automatique (voir aussi le disabled du sélecteur ci-dessus).
+                  if (e.target.value === RECHERCHE_BAILLEUR_LABEL && form.type_dossier === "financement") {
+                    set("type_dossier", "montage");
+                  }
                 }}
               >
                 <option value="">-- Sélectionner un bailleur --</option>
