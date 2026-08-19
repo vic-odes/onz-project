@@ -107,11 +107,15 @@ export interface ResultatsFinancement {
   opportunites: OpportuniteFinancement[];
 }
 
+export type StatutRecherche = "en_cours" | "termine" | "erreur";
+
 export interface RechercheFinancementResponse {
   id: number;
   project_id: number;
   project_nom: string;
   recherche_live: boolean;
+  status: StatutRecherche;
+  erreur: string | null;
   created_at: string;
   resultats: ResultatsFinancement;
 }
@@ -119,6 +123,7 @@ export interface RechercheFinancementResponse {
 export interface RechercheFinancementSummary {
   id: number;
   recherche_live: boolean;
+  status: StatutRecherche;
   created_at: string;
   nb_opportunites: number;
   resume: string;

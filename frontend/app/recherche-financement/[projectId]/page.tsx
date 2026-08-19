@@ -105,10 +105,14 @@ function LauncherContent({ projectId }: { projectId: number }) {
                   className="card flex items-center justify-between gap-4 py-3 hover:shadow-lg transition-shadow"
                 >
                   <div>
-                    <p className="font-source text-sm text-gray-700">{h.resume || "Résultats de recherche"}</p>
+                    <p className="font-source text-sm text-gray-700">
+                      {h.status === "en_cours" && "🔄 Recherche en cours…"}
+                      {h.status === "erreur" && "✗ Recherche échouée"}
+                      {h.status === "termine" && (h.resume || "Résultats de recherche")}
+                    </p>
                     <p className="font-source text-xs text-gray-400">
                       {new Date(h.created_at).toLocaleDateString("fr-FR", { day: "2-digit", month: "long", year: "numeric" })}
-                      {" · "}{h.nb_opportunites} opportunité(s)
+                      {h.status === "termine" && <> · {h.nb_opportunites} opportunité(s)</>}
                     </p>
                   </div>
                   <span className="font-source text-sm font-semibold text-bleu-marine shrink-0">Voir →</span>

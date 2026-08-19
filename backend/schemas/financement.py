@@ -14,6 +14,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 Categorie = Literal["tres_compatible", "compatible", "a_etudier", "faible", "non_eligible"]
 Fiabilite = Literal["verifie", "a_confirmer", "information_non_disponible"]
+StatutRecherche = Literal["en_cours", "termine", "erreur"]
 
 # Valeur du champ `bailleur` posée quand aucun bailleur précis n'est visé — doit
 # rester identique à `RECHERCHE_BAILLEUR_LABEL` dans frontend/lib/constants.ts.
@@ -67,7 +68,13 @@ class ResultatsFinancement(BaseModel):
 
 
 class RechercheFinancementResponse(BaseModel):
-    """Réponse de l'API pour une recherche persistée."""
+    """Réponse de l'API pour une recherche persistée.
+
+    La recherche s'exécute en tâche de fond (l'appel LLM + recherche web peut
+    prendre plusieurs minutes) — `status="en_cours"` tant qu'elle n'est pas
+    terminée, `resultats` restant vide dans ce cas. Le frontend sonde
+    `GET /api/financements/{id}` jusqu'à `status != "en_cours"`.
+    """
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -75,6 +82,8 @@ class RechercheFinancementResponse(BaseModel):
     project_id: int
     project_nom: str
     recherche_live: bool
+    status: StatutRecherche
+    erreur: Optional[str] = None
     created_at: datetime
     resultats: ResultatsFinancement
 
@@ -86,6 +95,7 @@ class RechercheFinancementSummary(BaseModel):
 
     id: int
     recherche_live: bool
+    status: StatutRecherche
     created_at: datetime
     nb_opportunites: int
     resume: str

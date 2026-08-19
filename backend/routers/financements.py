@@ -1,11 +1,10 @@
 import json
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException
-from pydantic import ValidationError
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from database import get_db
+from database import SessionLocal, get_db
 from dependencies import get_current_user
 from models.financement import RechercheFinancement
 from models.project import Project
@@ -51,17 +50,15 @@ def _to_response(recherche: RechercheFinancement, project_nom: str) -> Recherche
         project_id=recherche.project_id,
         project_nom=project_nom,
         recherche_live=recherche.recherche_live,
+        status=recherche.status,
+        erreur=recherche.erreur,
         created_at=recherche.created_at,
         resultats=ResultatsFinancement.model_validate(json.loads(recherche.resultats)),
     )
 
 
-async def _rechercher_et_persister(
-    db: Session, current_user: User, project: Project
-) -> RechercheFinancementResponse:
-    """Lance la recherche LLM pour `project`, persiste le résultat, et renvoie la
-    réponse API. Partagé par `/rechercher/{project_id}` et `/importer`."""
-    project_data = {
+def _project_data(project: Project) -> dict:
+    return {
         "nom": project.nom,
         "pays": project.pays,
         "secteur": project.secteur,
@@ -71,57 +68,83 @@ async def _rechercher_et_persister(
         "duree_mois": project.duree_mois,
     }
 
-    try:
-        resultats, recherche_live = await financement_service.rechercher_financements(project_data)
-    except json.JSONDecodeError as e:
-        logger.exception("Recherche de financement — JSON invalide retourné par le modèle")
-        raise HTTPException(status_code=502, detail=f"Le modèle IA a retourné un JSON invalide : {str(e)}")
-    except ValidationError as e:
-        missing = [".".join(str(p) for p in err["loc"]) for err in e.errors()]
-        logger.error("Recherche de financement — sortie invalide : %s", missing)
-        raise HTTPException(
-            status_code=502,
-            detail=f"Le modèle IA a retourné une réponse incomplète (champ(s) : {', '.join(missing)}). Réessayez.",
-        )
-    except Exception as e:
-        logger.exception("Erreur lors de la recherche de financement")
-        raise HTTPException(status_code=500, detail=f"Erreur lors de la recherche de financement : {str(e)}")
 
+async def _executer_recherche_en_arriere_plan(recherche_id: int, project_data: dict) -> None:
+    """Exécute l'appel LLM (potentiellement long — recherche web incluse) et
+    met à jour la ligne à la fin. Tourne après l'envoi de la réponse HTTP —
+    utilise sa propre session DB, indépendante de celle de la requête (déjà
+    fermée à ce stade)."""
+    db = SessionLocal()
+    try:
+        recherche = db.query(RechercheFinancement).filter(RechercheFinancement.id == recherche_id).first()
+        if not recherche:
+            logger.error("Recherche %d introuvable au moment de l'exécution en arrière-plan", recherche_id)
+            return
+        try:
+            resultats, recherche_live = await financement_service.rechercher_financements(project_data)
+        except Exception as e:
+            logger.exception("Recherche de financement %d — échec en arrière-plan", recherche_id)
+            recherche.status = "erreur"
+            recherche.erreur = str(e)
+            db.commit()
+            return
+
+        recherche.resultats = json.dumps(resultats.model_dump(), ensure_ascii=False)
+        recherche.recherche_live = recherche_live
+        recherche.status = "termine"
+        db.commit()
+        logger.info("Recherche de financement %d terminée (%d opportunité(s))", recherche_id, len(resultats.opportunites))
+    finally:
+        db.close()
+
+
+def _demarrer_recherche(
+    db: Session, background_tasks: BackgroundTasks, current_user: User, project: Project
+) -> RechercheFinancementResponse:
+    """Crée la ligne en `status="en_cours"` et programme la recherche LLM en
+    tâche de fond. Retourne immédiatement — le frontend sonde `GET /{id}`."""
+    project_data = _project_data(project)
     recherche = RechercheFinancement(
         user_id=current_user.id,
         project_id=project.id,
         criteres=json.dumps(project_data, ensure_ascii=False),
-        resultats=json.dumps(resultats.model_dump(), ensure_ascii=False),
-        recherche_live=recherche_live,
+        resultats="{}",
+        recherche_live=False,
+        status="en_cours",
     )
     db.add(recherche)
     db.commit()
     db.refresh(recherche)
 
+    background_tasks.add_task(_executer_recherche_en_arriere_plan, recherche.id, project_data)
+
     return _to_response(recherche, project.nom)
 
 
 @router.post("/rechercher/{project_id}", response_model=RechercheFinancementResponse)
-async def rechercher_financement(
+def rechercher_financement(
     project_id: int,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Lance une recherche de financements pour un projet déjà monté et la persiste."""
+    """Démarre une recherche de financements pour un projet déjà monté (en
+    arrière-plan) et renvoie immédiatement son état initial."""
     project = _owned_project_or_404(db, project_id, current_user.id)
-    return await _rechercher_et_persister(db, current_user, project)
+    return _demarrer_recherche(db, background_tasks, current_user, project)
 
 
 @router.post("/importer", response_model=RechercheFinancementResponse)
-async def importer_et_rechercher(
+def importer_et_rechercher(
     payload: ImporterProjetRequest,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     """Crée un projet minimal (sans document généré) à partir de champs extraits
-    d'un PDF externe — via /api/documents/prefill côté frontend — et lance
-    immédiatement une recherche de financement. Permet de rechercher un
-    financement pour un projet monté hors de l'application."""
+    d'un PDF externe — via /api/documents/prefill côté frontend — et démarre
+    immédiatement une recherche de financement en arrière-plan. Permet de
+    rechercher un financement pour un projet monté hors de l'application."""
     project = Project(
         user_id=current_user.id,
         nom=payload.nom,
@@ -137,7 +160,7 @@ async def importer_et_rechercher(
     db.commit()
     db.refresh(project)
 
-    return await _rechercher_et_persister(db, current_user, project)
+    return _demarrer_recherche(db, background_tasks, current_user, project)
 
 
 @router.get("/{recherche_id}", response_model=RechercheFinancementResponse)
@@ -146,6 +169,7 @@ def get_recherche(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    """À sonder par le frontend tant que `status == "en_cours"`."""
     recherche = _owned_recherche_or_404(db, recherche_id, current_user.id)
     project = db.query(Project).filter(Project.id == recherche.project_id).first()
     return _to_response(recherche, project.nom if project else "")
@@ -173,6 +197,7 @@ def list_recherches_pour_projet(
             RechercheFinancementSummary(
                 id=r.id,
                 recherche_live=r.recherche_live,
+                status=r.status,
                 created_at=r.created_at,
                 nb_opportunites=len(resultats.get("opportunites", [])),
                 resume=resultats.get("resume", ""),

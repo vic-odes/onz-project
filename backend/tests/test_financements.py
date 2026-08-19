@@ -27,7 +27,7 @@ from models.project import Project
 
 
 @pytest.fixture
-def client(tmp_path):
+def client(tmp_path, monkeypatch):
     engine = create_engine(
         f"sqlite:///{tmp_path}/test.db",
         connect_args={"check_same_thread": False},
@@ -43,6 +43,10 @@ def client(tmp_path):
             db.close()
 
     main.app.dependency_overrides[get_db] = _override_get_db
+    # La tâche de fond de recherche financement appelle SessionLocal() directement
+    # (pas Depends(get_db), puisqu'elle tourne après la fin de la requête) — la
+    # rediriger elle aussi vers la DB de test, sinon elle écrit dans la DB globale.
+    monkeypatch.setattr(financements_router, "SessionLocal", TestingSession)
     limiter.enabled = False
     tc = TestClient(main.app)
     tc.testing_session_factory = TestingSession
@@ -109,6 +113,10 @@ async def _fake_ok(project_data):
 
 
 def test_rechercher_financement_happy_path(client, monkeypatch):
+    """La recherche s'exécute en arrière-plan : la réponse du POST est un
+    instantané pris AVANT que la tâche de fond ne s'exécute — elle montre donc
+    toujours status="en_cours", même si (comme ici, sous TestClient) la tâche
+    a déjà terminé quand le POST revient. Le résultat final s'obtient via GET."""
     monkeypatch.setattr(financements_router.financement_service, "rechercher_financements", _fake_ok)
     user_id = _register(client)
     project_id = _insert_project(client, user_id)
@@ -118,22 +126,27 @@ def test_rechercher_financement_happy_path(client, monkeypatch):
     body = r.json()
     assert body["project_id"] == project_id
     assert body["project_nom"] == "Adduction eau Makénéné"
-    assert body["recherche_live"] is True
-    assert len(body["resultats"]["opportunites"]) == 1
-    assert body["resultats"]["opportunites"][0]["bailleur"] == "AFD"
+    assert body["status"] == "en_cours"
+    assert body["resultats"]["opportunites"] == []
 
     recherche_id = body["id"]
 
-    # GET par id renvoie le même contenu
+    # GET par id renvoie le résultat final une fois la tâche de fond terminée
     r2 = client.get(f"/api/financements/{recherche_id}")
     assert r2.status_code == 200
-    assert r2.json()["id"] == recherche_id
+    body2 = r2.json()
+    assert body2["id"] == recherche_id
+    assert body2["status"] == "termine"
+    assert body2["recherche_live"] is True
+    assert len(body2["resultats"]["opportunites"]) == 1
+    assert body2["resultats"]["opportunites"][0]["bailleur"] == "AFD"
 
     # GET par projet liste la recherche (résumé)
     r3 = client.get(f"/api/financements/projet/{project_id}")
     assert r3.status_code == 200
     summaries = r3.json()
     assert len(summaries) == 1
+    assert summaries[0]["status"] == "termine"
     assert summaries[0]["nb_opportunites"] == 1
     assert "compatible" in summaries[0]["resume"]
 
@@ -161,7 +174,9 @@ def test_get_recherche_unknown_id_is_404(client):
     assert r.status_code == 404
 
 
-def test_rechercher_financement_llm_error_is_502(client, monkeypatch):
+def test_rechercher_financement_llm_error_sets_status_erreur(client, monkeypatch):
+    """L'échec de la recherche se produit désormais dans la tâche de fond — le
+    POST renvoie toujours 200 (démarrage réussi), l'échec se lit via GET."""
     import json as json_module
 
     async def _boom(project_data):
@@ -172,7 +187,14 @@ def test_rechercher_financement_llm_error_is_502(client, monkeypatch):
     project_id = _insert_project(client, user_id)
 
     r = client.post(f"/api/financements/rechercher/{project_id}")
-    assert r.status_code == 502
+    assert r.status_code == 200, r.text
+    recherche_id = r.json()["id"]
+
+    r2 = client.get(f"/api/financements/{recherche_id}")
+    assert r2.status_code == 200
+    body2 = r2.json()
+    assert body2["status"] == "erreur"
+    assert body2["erreur"]
 
 
 def test_importer_et_rechercher_happy_path(client, monkeypatch):
@@ -193,7 +215,9 @@ def test_importer_et_rechercher_happy_path(client, monkeypatch):
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["project_nom"] == "Projet importé depuis PDF"
-    assert body["resultats"]["opportunites"][0]["bailleur"] == "AFD"
+
+    r2 = client.get(f"/api/financements/{body['id']}")
+    assert r2.json()["resultats"]["opportunites"][0]["bailleur"] == "AFD"
 
     # Le projet créé n'a pas de docx — il apparaît quand même dans /api/projects/
     projects = client.get("/api/projects/").json()
