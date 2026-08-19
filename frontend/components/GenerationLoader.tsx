@@ -113,7 +113,8 @@ export default function GenerationLoader({
         />
       </div>
       <p className="font-source text-xs text-gray-400">
-        Cette opération peut prendre 30 à 60 secondes…
+        Cette opération peut prendre plusieurs minutes selon les documents joints — vous pouvez
+        laisser cet onglet ouvert, la génération continue côté serveur.
       </p>
     </div>
   );

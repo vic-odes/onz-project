@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
-import { evaluateProject, Evaluation, generateDocument, generateNoteConceptuelle, prefillFromPdf, ProjectFormData, rechercherFinancement } from "@/lib/api";
+import { demarrerGeneration, downloadProject, evaluateProject, Evaluation, generateNoteConceptuelle, getGenerationJob, prefillFromPdf, ProjectFormData, rechercherFinancement } from "@/lib/api";
 import { BAILLEURS, RECHERCHE_BAILLEUR_LABEL, SECTEURS, STEP_LABELS } from "@/lib/constants";
 import { useRouter } from "next/navigation";
 import GenerationLoader from "./GenerationLoader";
@@ -108,6 +108,7 @@ export default function Stepper() {
   const [error, setError] = useState<string | null>(null);
   const [draftRestored, setDraftRestored] = useState(false);
   const draftLoaded = useRef(false);
+  const generationCancelled = useRef(false);
   // Évaluation (aide à la décision, lot B)
   const [evaluating, setEvaluating] = useState(false);
   const [evaluation, setEvaluation] = useState<Evaluation | null>(null);
@@ -246,7 +247,42 @@ export default function Stepper() {
     objectifs_specifiques: form.objectifs_specifiques.filter((o) => o.trim()),
   });
 
+  // La génération s'exécute en arrière-plan côté serveur (l'appel LLM — PDFs
+  // natifs possibles — peut prendre plus d'une minute, trop long pour une
+  // requête bloquante fiable côté navigateur : `net::ERR_NETWORK_IO_SUSPENDED`
+  // si l'appareil se met en veille pendant l'attente). On sonde l'état jusqu'à
+  // ce qu'il change, puis on télécharge le document via le projet créé.
+  const GENERATION_POLL_INTERVAL_MS = 4000;
+
+  const pollGenerationJob = async (jobId: number): Promise<void> => {
+    const job = await getGenerationJob(jobId);
+    if (generationCancelled.current) return;
+
+    if (job.status === "en_cours") {
+      await new Promise((resolve) => setTimeout(resolve, GENERATION_POLL_INTERVAL_MS));
+      if (generationCancelled.current) return;
+      return pollGenerationJob(jobId);
+    }
+    if (job.status === "erreur") {
+      setError(job.erreur || "La génération a échoué.");
+      setGenerating(false);
+      return;
+    }
+    if (!job.project_id) {
+      setError("Génération terminée mais le projet est introuvable.");
+      setGenerating(false);
+      return;
+    }
+    const docxBlob = await downloadProject(job.project_id);
+    if (generationCancelled.current) return;
+    setBlob(docxBlob);
+    setProjectId(job.project_id);
+    setGenerating(false);
+    clearDraft();
+  };
+
   const handleGenerate = async () => {
+    generationCancelled.current = false;
     setGenerating(true);
     setError(null);
     setBlob(null);
@@ -254,20 +290,24 @@ export default function Stepper() {
     setFinancementError(null);
     const allPdfs = [...budgetPdfs, ...referencePdfs];
     try {
-      // Le endpoint renvoie directement le .docx (génération IA + mise en forme + persistance).
-      const { blob: docxBlob, projectId: newProjectId } = await generateDocument({
+      const job = await demarrerGeneration({
         ...normalizedForm(),
         reference_pdfs: allPdfs.length > 0 ? allPdfs.map((f) => f.b64) : undefined,
       });
-      setBlob(docxBlob);
-      setProjectId(newProjectId);
-      clearDraft();
+      await pollGenerationJob(job.id);
     } catch (e: unknown) {
+      if (generationCancelled.current) return;
       setError(e instanceof Error ? e.message : "Erreur inconnue");
-    } finally {
       setGenerating(false);
     }
   };
+
+  // Annule le sondage en cours si le composant se démonte pendant la génération.
+  useEffect(() => {
+    return () => {
+      generationCancelled.current = true;
+    };
+  }, []);
 
   // Déclenchée depuis l'écran de succès quand le bailleur « recherche automatique »
   // a été choisi à l'étape 1 — enchaîne sur la recherche de financement du projet

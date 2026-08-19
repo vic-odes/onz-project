@@ -246,28 +246,46 @@ export async function logout(): Promise<void> {
 // Projets
 // ─────────────────────────────────────────────────────────────────────────
 
-export interface GenerateDocumentResult {
-  blob: Blob;
-  // Id du projet créé, si la persistance a réussi côté serveur (voir X-Project-Id).
-  // Permet d'enchaîner sur une recherche de financement sans relister les projets.
-  projectId: number | null;
+// La génération (appel LLM, PDFs natifs possibles) peut prendre plus d'une
+// minute — trop long pour une requête bloquante fiable côté navigateur (ex.
+// `net::ERR_NETWORK_IO_SUSPENDED` si l'appareil se met en veille). Elle
+// s'exécute donc en tâche de fond côté serveur ; le frontend sonde l'état via
+// `getGenerationJob` jusqu'à `status != "en_cours"`, puis télécharge le
+// document via `downloadProject(job.project_id)`.
+export type StatutGeneration = "en_cours" | "termine" | "erreur";
+
+export interface GenerationJobResponse {
+  id: number;
+  status: StatutGeneration;
+  erreur: string | null;
+  project_id: number | null;
+  created_at: string;
 }
 
-export async function generateDocument(data: ProjectFormData): Promise<GenerateDocumentResult> {
-  const response = await apiFetch("/api/generate/", {
+export async function demarrerGeneration(data: ProjectFormData): Promise<GenerationJobResponse> {
+  const response = await apiFetch("/api/generate/demarrer", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(data),
   });
   if (!response.ok) {
     throw new ApiError(
-      await readErrorMessage(response, "Erreur lors de la génération du document."),
+      await readErrorMessage(response, "Erreur lors du démarrage de la génération."),
       response.status,
     );
   }
-  const projectIdHeader = response.headers.get("X-Project-Id");
-  const blob = await response.blob();
-  return { blob, projectId: projectIdHeader ? Number(projectIdHeader) : null };
+  return response.json();
+}
+
+export async function getGenerationJob(jobId: number): Promise<GenerationJobResponse> {
+  const response = await apiFetch(`/api/generate/etat/${jobId}`);
+  if (!response.ok) {
+    throw new ApiError(
+      await readErrorMessage(response, "État de génération introuvable."),
+      response.status,
+    );
+  }
+  return response.json();
 }
 
 export async function evaluateProject(data: ProjectFormData): Promise<Evaluation> {
