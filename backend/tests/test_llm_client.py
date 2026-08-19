@@ -34,3 +34,60 @@ def test_parse_unrepairable_raises():
     # Texte qui n'est pas du JSON d'objet du tout → on remonte l'erreur d'origine.
     with pytest.raises(json.JSONDecodeError):
         llm_client.parse_json_response("ceci n'est pas du JSON")
+
+
+@pytest.mark.parametrize("model,expected", [
+    ("claude-sonnet-4-20250514", True),
+    ("claude-3-5-haiku-20241022", True),
+    ("gpt-4o", False),
+    ("mistral-large-latest", False),
+])
+def test_supports_web_search(model, expected):
+    assert llm_client.supports_web_search(model) is expected
+
+
+@pytest.mark.asyncio
+async def test_call_llm_passes_web_search_options(monkeypatch):
+    captured = {}
+
+    class _FakeChoice:
+        finish_reason = "end_turn"
+        message = type("M", (), {"content": '{"ok": true}'})()
+
+    class _FakeResponse:
+        choices = [_FakeChoice()]
+
+    async def _fake_acompletion(**kwargs):
+        captured.update(kwargs)
+        return _FakeResponse()
+
+    monkeypatch.setattr(llm_client.litellm, "acompletion", _fake_acompletion)
+
+    await llm_client.call_llm(
+        [{"role": "user", "content": "x"}],
+        max_tokens=100,
+        model="claude-sonnet-4-20250514",
+        web_search=True,
+    )
+    assert captured.get("web_search_options") == {"search_context_size": "medium"}
+
+
+@pytest.mark.asyncio
+async def test_call_llm_omits_web_search_options_by_default(monkeypatch):
+    captured = {}
+
+    class _FakeChoice:
+        finish_reason = "end_turn"
+        message = type("M", (), {"content": '{"ok": true}'})()
+
+    class _FakeResponse:
+        choices = [_FakeChoice()]
+
+    async def _fake_acompletion(**kwargs):
+        captured.update(kwargs)
+        return _FakeResponse()
+
+    monkeypatch.setattr(llm_client.litellm, "acompletion", _fake_acompletion)
+
+    await llm_client.call_llm([{"role": "user", "content": "x"}], max_tokens=100)
+    assert "web_search_options" not in captured

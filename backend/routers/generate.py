@@ -75,17 +75,24 @@ async def generate_document(
         logger.exception("Erreur lors de la création du document Word")
         raise HTTPException(status_code=500, detail=f"Erreur lors de la création du document Word : {str(e)}")
 
+    project_id: int | None = None
     try:
-        save_project(project_dict, generated, current_user.id, docx_bytes)
-        logger.debug("Projet et document DOCX sauvegardés")
+        saved = save_project(project_dict, generated, current_user.id, docx_bytes)
+        project_id = saved.id
+        logger.debug("Projet et document DOCX sauvegardés — id=%d", project_id)
     except Exception:
         logger.exception("Erreur sauvegarde SQLite (non bloquant)")
 
     docx_name = f"{(project.nom or '').strip() or 'Projet'}_ONZ.docx"
+    headers = {"Content-Disposition": content_disposition_attachment(docx_name)}
+    if project_id is not None:
+        # Permet au frontend d'enchaîner sur une recherche de financement (bailleur
+        # « à déterminer automatiquement ») sans avoir à relister les projets.
+        headers["X-Project-Id"] = str(project_id)
     return StreamingResponse(
         io.BytesIO(docx_bytes),
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        headers={"Content-Disposition": content_disposition_attachment(docx_name)},
+        headers=headers,
     )
 
 

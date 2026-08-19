@@ -1,7 +1,8 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
-import { evaluateProject, Evaluation, generateDocument, generateNoteConceptuelle, prefillFromPdf, ProjectFormData } from "@/lib/api";
-import { BAILLEURS, SECTEURS, STEP_LABELS } from "@/lib/constants";
+import { evaluateProject, Evaluation, generateDocument, generateNoteConceptuelle, prefillFromPdf, ProjectFormData, rechercherFinancement } from "@/lib/api";
+import { BAILLEURS, RECHERCHE_BAILLEUR_LABEL, SECTEURS, STEP_LABELS } from "@/lib/constants";
+import { useRouter } from "next/navigation";
 import GenerationLoader from "./GenerationLoader";
 import PdfUpload from "./PdfUpload";
 
@@ -91,6 +92,7 @@ function EvalList({ title, items, tone = "neutral" }: { title: string; items: st
 }
 
 export default function Stepper() {
+  const router = useRouter();
   const [step, setStep] = useState(0);
   const [form, setForm] = useState<ProjectFormData>(defaultForm);
   const [bailleurCustom, setBailleurCustom] = useState("");
@@ -100,6 +102,9 @@ export default function Stepper() {
   const [prefillError, setPrefillError] = useState<string | null>(null);
   const [generating, setGenerating] = useState(false);
   const [blob, setBlob] = useState<Blob | null>(null);
+  const [projectId, setProjectId] = useState<number | null>(null);
+  const [searchingFinancement, setSearchingFinancement] = useState(false);
+  const [financementError, setFinancementError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [draftRestored, setDraftRestored] = useState(false);
   const draftLoaded = useRef(false);
@@ -245,19 +250,39 @@ export default function Stepper() {
     setGenerating(true);
     setError(null);
     setBlob(null);
+    setProjectId(null);
+    setFinancementError(null);
     const allPdfs = [...budgetPdfs, ...referencePdfs];
     try {
       // Le endpoint renvoie directement le .docx (génération IA + mise en forme + persistance).
-      const docxBlob = await generateDocument({
+      const { blob: docxBlob, projectId: newProjectId } = await generateDocument({
         ...normalizedForm(),
         reference_pdfs: allPdfs.length > 0 ? allPdfs.map((f) => f.b64) : undefined,
       });
       setBlob(docxBlob);
+      setProjectId(newProjectId);
       clearDraft();
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Erreur inconnue");
     } finally {
       setGenerating(false);
+    }
+  };
+
+  // Déclenchée depuis l'écran de succès quand le bailleur « recherche automatique »
+  // a été choisi à l'étape 1 — enchaîne sur la recherche de financement du projet
+  // qui vient d'être créé, puis navigue vers la page de résultats dédiée.
+  const handleRechercherFinancement = async () => {
+    if (!projectId) return;
+    setSearchingFinancement(true);
+    setFinancementError(null);
+    try {
+      const recherche = await rechercherFinancement(projectId);
+      router.push(`/recherche-financement/resultats/${recherche.id}`);
+    } catch (e: unknown) {
+      setFinancementError(e instanceof Error ? e.message : "Erreur inconnue");
+    } finally {
+      setSearchingFinancement(false);
     }
   };
 
@@ -305,6 +330,27 @@ export default function Stepper() {
           fileName={fileName}
           error={error}
         />
+        {blob && form.bailleur === RECHERCHE_BAILLEUR_LABEL && projectId && (
+          <div className="rounded-xl border border-vert-sauge/30 bg-vert-sauge/5 p-5 mt-6 text-center">
+            <p className="font-playfair text-base font-bold text-bleu-marine mb-1">
+              🔎 Vous avez choisi de rechercher un bailleur automatiquement
+            </p>
+            <p className="font-source text-sm text-gray-600 mb-4">
+              Lancez la recherche de financements compatibles avec ce projet.
+            </p>
+            {financementError && (
+              <p role="alert" className="font-source text-sm text-red-600 mb-3">{financementError}</p>
+            )}
+            <button
+              type="button"
+              onClick={handleRechercherFinancement}
+              disabled={searchingFinancement}
+              className="btn-accent disabled:opacity-60"
+            >
+              {searchingFinancement ? "Recherche en cours…" : "🔎 Rechercher les financements disponibles"}
+            </button>
+          </div>
+        )}
         {blob && (
           <div className="flex justify-center mt-4">
             <button
@@ -312,7 +358,8 @@ export default function Stepper() {
                 setBlob(null);
                 setError(null);
                 setGenerating(false);
-               
+                setProjectId(null);
+                setFinancementError(null);
                 setStep(0);
                 setForm(defaultForm);
                 setBailleurCustom("");
@@ -525,7 +572,13 @@ export default function Stepper() {
                 {BAILLEURS.map((b) => (
                   <option key={b} value={b}>{b}</option>
                 ))}
+                <option value={RECHERCHE_BAILLEUR_LABEL}>🔎 Rechercher un bailleur automatiquement</option>
               </select>
+              {form.bailleur === RECHERCHE_BAILLEUR_LABEL && (
+                <p className="font-source text-xs text-vert-sauge mt-2">
+                  Une recherche de financement sera proposée une fois le document généré.
+                </p>
+              )}
               {form.bailleur === "Autre" && (
                 <input
                   className="input-field mt-2"

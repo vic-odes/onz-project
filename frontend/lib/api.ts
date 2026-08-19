@@ -76,6 +76,54 @@ export interface Evaluation {
   notation: Notation;
 }
 
+// Recherche de financement — POST /api/financements/rechercher/{project_id}
+export type CategorieFinancement = "tres_compatible" | "compatible" | "a_etudier" | "faible" | "non_eligible";
+export type FiabiliteFinancement = "verifie" | "a_confirmer" | "information_non_disponible";
+
+export interface OpportuniteFinancement {
+  bailleur: string;
+  programme: string;
+  nom_appel: string;
+  description: string;
+  categorie: CategorieFinancement;
+  score_compatibilite: number;
+  montant_min: number | null;
+  montant_max: number | null;
+  devise: string;
+  taux_cofinancement_max: string;
+  date_limite: string;
+  depot_permanent: boolean;
+  raisons_compatibilite: string[];
+  points_vigilance: string[];
+  conditions_principales: string[];
+  source_officielle: string;
+  lien_candidature: string;
+  fiabilite: FiabiliteFinancement;
+  date_verification: string;
+}
+
+export interface ResultatsFinancement {
+  resume: string;
+  opportunites: OpportuniteFinancement[];
+}
+
+export interface RechercheFinancementResponse {
+  id: number;
+  project_id: number;
+  project_nom: string;
+  recherche_live: boolean;
+  created_at: string;
+  resultats: ResultatsFinancement;
+}
+
+export interface RechercheFinancementSummary {
+  id: number;
+  recherche_live: boolean;
+  created_at: string;
+  nb_opportunites: number;
+  resume: string;
+}
+
 export class ApiError extends Error {
   status: number;
   constructor(message: string, status: number) {
@@ -182,7 +230,14 @@ export async function logout(): Promise<void> {
 // Projets
 // ─────────────────────────────────────────────────────────────────────────
 
-export async function generateDocument(data: ProjectFormData): Promise<Blob> {
+export interface GenerateDocumentResult {
+  blob: Blob;
+  // Id du projet créé, si la persistance a réussi côté serveur (voir X-Project-Id).
+  // Permet d'enchaîner sur une recherche de financement sans relister les projets.
+  projectId: number | null;
+}
+
+export async function generateDocument(data: ProjectFormData): Promise<GenerateDocumentResult> {
   const response = await apiFetch("/api/generate/", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -194,7 +249,9 @@ export async function generateDocument(data: ProjectFormData): Promise<Blob> {
       response.status,
     );
   }
-  return response.blob();
+  const projectIdHeader = response.headers.get("X-Project-Id");
+  const blob = await response.blob();
+  return { blob, projectId: projectIdHeader ? Number(projectIdHeader) : null };
 }
 
 export async function evaluateProject(data: ProjectFormData): Promise<Evaluation> {
@@ -281,6 +338,45 @@ export async function downloadBudgetExcel(id: number): Promise<Blob> {
     );
   }
   return response.blob();
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Recherche de financement
+// ─────────────────────────────────────────────────────────────────────────
+
+export async function rechercherFinancement(projectId: number): Promise<RechercheFinancementResponse> {
+  const response = await apiFetch(`/api/financements/rechercher/${projectId}`, {
+    method: "POST",
+  });
+  if (!response.ok) {
+    throw new ApiError(
+      await readErrorMessage(response, "Erreur lors de la recherche de financement."),
+      response.status,
+    );
+  }
+  return response.json();
+}
+
+export async function getRechercheFinancement(rechercheId: number): Promise<RechercheFinancementResponse> {
+  const response = await apiFetch(`/api/financements/${rechercheId}`);
+  if (!response.ok) {
+    throw new ApiError(
+      await readErrorMessage(response, "Recherche de financement introuvable."),
+      response.status,
+    );
+  }
+  return response.json();
+}
+
+export async function listRecherchesPourProjet(projectId: number): Promise<RechercheFinancementSummary[]> {
+  const response = await apiFetch(`/api/financements/projet/${projectId}`);
+  if (!response.ok) {
+    throw new ApiError(
+      await readErrorMessage(response, "Impossible de charger l'historique des recherches."),
+      response.status,
+    );
+  }
+  return response.json();
 }
 
 export async function prefillFromPdf(pdfB64: string): Promise<Partial<ProjectFormData>> {
