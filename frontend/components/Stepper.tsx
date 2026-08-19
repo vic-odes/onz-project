@@ -566,7 +566,13 @@ export default function Stepper() {
               <select
                 className="input-field"
                 value={form.bailleur}
-                onChange={(e) => { set("bailleur", e.target.value); if (e.target.value !== "Autre") setBailleurCustom(""); }}
+                onChange={(e) => {
+                  set("bailleur", e.target.value);
+                  if (e.target.value !== "Autre") setBailleurCustom("");
+                  // L'évaluation cible un bailleur précis — invalide dès que le bailleur change.
+                  setEvaluation(null);
+                  setEvalError(null);
+                }}
               >
                 <option value="">-- Sélectionner un bailleur --</option>
                 {BAILLEURS.map((b) => (
@@ -887,13 +893,15 @@ export default function Stepper() {
                   </p>
                 </div>
                 <div className="flex gap-2 flex-wrap">
-                  <button
-                    onClick={handleEvaluate}
-                    disabled={evaluating}
-                    className="btn-secondary whitespace-nowrap disabled:opacity-50 disabled:cursor-default"
-                  >
-                    {evaluating ? "Évaluation en cours…" : "◎ Évaluer la compatibilité"}
-                  </button>
+                  {form.bailleur !== RECHERCHE_BAILLEUR_LABEL && (
+                    <button
+                      onClick={handleEvaluate}
+                      disabled={evaluating}
+                      className="btn-secondary whitespace-nowrap disabled:opacity-50 disabled:cursor-default"
+                    >
+                      {evaluating ? "Évaluation en cours…" : "◎ Évaluer la compatibilité"}
+                    </button>
+                  )}
                   <button
                     onClick={handleNoteConceptuelle}
                     disabled={noteLoading}
@@ -903,6 +911,14 @@ export default function Stepper() {
                   </button>
                 </div>
               </div>
+
+              {form.bailleur === RECHERCHE_BAILLEUR_LABEL && (
+                <p className="mt-4 text-sm text-gray-500 font-source italic">
+                  L&apos;évaluation de compatibilité analyse un bailleur précis — indisponible tant
+                  qu&apos;aucun bailleur n&apos;est choisi. Utilisez plutôt la recherche de financement
+                  après la génération du document.
+                </p>
+              )}
 
               {evalError && (
                 <p className="mt-4 text-sm text-red-600 font-source">{evalError}</p>
