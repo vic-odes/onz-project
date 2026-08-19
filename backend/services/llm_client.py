@@ -48,8 +48,18 @@ def supports_web_search(model: Optional[str] = None) -> bool:
     return "claude" in (model or get_model()).lower()
 
 
-def azure_extras() -> dict:
-    """Kwargs Azure à passer à `litellm.acompletion`, vides si non configurés."""
+def azure_extras(model: Optional[str] = None) -> dict:
+    """Kwargs Azure OpenAI à passer à `litellm.acompletion`, vides si non configurés.
+
+    Ne s'applique jamais à un modèle Claude : celui-ci a son propre schéma
+    d'authentification (`ANTHROPIC_API_KEY`/`ANTHROPIC_API_BASE`, y compris pour
+    Claude hébergé sur Azure AI Foundry), lu nativement par litellm — pas par
+    cette fonction. Sans ce garde-fou, des variables AZURE_API_* restées
+    définies (ex. une ancienne config Azure OpenAI) écraseraient silencieusement
+    la bonne configuration dès qu'on bascule `LLM_MODEL` sur un modèle Claude.
+    """
+    if "claude" in (model or get_model()).lower():
+        return {}
     extras = {}
     if (k := os.getenv("AZURE_API_KEY")):
         extras["api_key"] = k
@@ -95,7 +105,7 @@ async def call_llm(
     - Toute exception remontée par `litellm.acompletion` (réseau, auth, etc.).
     """
     used_model = model or get_model()
-    used_extra = extra if extra is not None else azure_extras()
+    used_extra = extra if extra is not None else azure_extras(used_model)
 
     logger.debug(
         "LLM call — model=%s max_tokens=%d temperature=%s messages=%d extra_keys=%s web_search=%s",
