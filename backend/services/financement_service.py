@@ -20,7 +20,12 @@ from schemas.financement import ResultatsFinancement
 
 logger = logging.getLogger(__name__)
 
-_FINANCEMENT_MAX_TOKENS = 6000
+# 16000 — même valeur/justification que `ai_service._compute_max_tokens` : le prompt
+# demande jusqu'à 15 opportunités, chacune avec plusieurs champs texte et listes
+# (raisons_compatibilite, points_vigilance, conditions_principales…), et un modèle à
+# raisonnement (GPT-5, o1…) impute ses tokens de raisonnement invisibles sur cette même
+# limite. 6000 tronquait la réponse en usage réel avant que la liste ne soit complète.
+_FINANCEMENT_MAX_TOKENS = 16000
 _FINANCEMENT_TEMPERATURE = 0.2
 
 _RECHERCHE_LIVE_NOTE = (
